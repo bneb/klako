@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <title>Klako Notebook - Vanilla Test Harness</title>
+    <style>
+        body { background: #111; color: #fff; font-family: monospace; padding: 20px; }
+        .pass { color: #00ff00; }
+        .fail { color: #ff0000; }
+        #test-report { margin-bottom: 40px; }
+        
+        /* Visually hide the actual UI payload to keep focus on test reporting */
+        #klako-chassis { display: none; }
+    </style>
+</head>
+<body>
+    <h1>Klako Notebook: Red-to-Green Harness</h1>
+    <div id="test-report"></div>
+
+    <!-- INJECTED APP DOM FOR A SANBOXED ENVIRONMENT -->
+    <div id="klako-chassis">
+        <main id="narrative-pane">
+            <header class="pane-header">
+                <button id="theme-toggle" aria-label="Toggle Polarity">◐</button>
+            </header>
+            <div id="chat-history"></div>
+            <div id="input-zone">
+                <textarea id="prompt-input"></textarea>
+            </div>
+        </main>
+        
+        <aside id="mechanics-pane">
+            <header id="router-status">
+                <span id="tier-indicator" class="status-indicator idle"></span>
+                <span id="active-tier">L0_Thinker // Idle</span>
+            </header>
+            <div id="canvas-sticky-date"></div>
+            <div id="canvas-container">
+                <canvas id="telemetry-canvas"></canvas>
+            </div>
+        </aside>
+    </div>
+
+    <script src="app.js"></script>
+    <script src="test.js"></script>
+</body>
+</html>

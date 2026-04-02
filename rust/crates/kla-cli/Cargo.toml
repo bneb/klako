@@ -1,0 +1,38 @@
+[package]
+name = "kla-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "kla"
+path = "src/main.rs"
+
+[dependencies]
+api = { path = "../api" }
+commands = { path = "../commands" }
+compat-harness = { path = "../compat-harness" }
+crossterm = "0.28"
+pulldown-cmark = "0.13"
+rustyline = "15"
+runtime = { path = "../runtime" }
+plugins = { path = "../plugins" }
+serde_json.workspace = true
+syntect = "5"
+tokio = { version = "1", features = ["rt-multi-thread", "time"] }
+tools = { path = "../tools" }
+axum = { version = "0.7", features = ["ws"] }
+tower-http = { version = "0.6", features = ["cors"] }
+futures-util = "0.3"
+rust-embed = { version = "8" }
+mime_guess = "2"
+rpassword = "7.4.0"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+
+[features]
+default = []
+debug-embed = ["rust-embed/debug-embed"]
+
+[lints]
+workspace = true
