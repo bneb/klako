@@ -1,0 +1,9 @@
+__pycache__/
+archive/
+.omx/
+# Klako local artifacts
+.kla/settings.local.json
+.kla.local.json
+.kla/sessions/
+.kla-agents/
+.kla.json

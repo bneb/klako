@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Klako Notebook</title>
+    <link rel="icon" type="image/png" href="/favicon.png">
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <script src="vendor/marked.umd.min.js"></script>
+    <script src="vendor/purify.min.js"></script>
+    <script src="vendor/highlight.min.js"></script>
+    <link rel="stylesheet" href="vendor/github-dark.min.css">
+</head>
+<body>
+    <div id="klako-chassis">
+        <main id="narrative-pane">
+            <header class="pane-header">
+                <span class="brand-wordmark">Ⓚ Klako</span>
+                <button id="theme-toggle" aria-label="Toggle Polarity">◐</button>
+            </header>
+            <div id="chat-history"></div>
+            <div id="input-zone">
+                <textarea id="prompt-input" placeholder="Initiate sequence..." autofocus></textarea>
+            </div>
+        </main>
+        
+        <aside id="mechanics-pane">
+            <header id="router-status">
+                <span id="tier-indicator" class="status-indicator idle"></span>
+                <span id="active-tier">L0_Thinker // Idle</span>
+            </header>
+            <div id="canvas-sticky-date"></div>
+            <div id="canvas-container">
+                <canvas id="telemetry-canvas"></canvas>
+            </div>
+        </aside>
+    </div>
+
+    <div id="permission-modal" class="hidden">
+        <div class="modal-content">
+            <h3 id="modal-tool-name">Permission Required</h3>
+            <p id="modal-tool-desc">A tool wishes to execute.</p>
+            <div class="modal-input-block">
+                <pre><code id="modal-tool-input"></code></pre>
+            </div>
+            <div class="modal-actions">
+                <button id="modal-deny-btn" class="danger-btn">Deny Execute</button>
+                <button id="modal-allow-btn" class="primary-btn">Allow Proceed</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
