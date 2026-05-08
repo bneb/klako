@@ -34,20 +34,26 @@ pub enum AuthSource {
 
 impl AuthSource {
     pub fn from_env() -> Result<Self, ApiError> {
-        let api_key = read_env_non_empty("ANTHROPIC_API_KEY")?;
-        let auth_token = read_env_non_empty("ANTHROPIC_AUTH_TOKEN")?;
-        match (api_key, auth_token) {
-            (Some(api_key), Some(bearer_token)) => Ok(Self::ApiKeyAndBearer {
-                api_key,
-                bearer_token,
-            }),
-            (Some(api_key), None) => Ok(Self::ApiKey(api_key)),
-            (None, Some(bearer_token)) => Ok(Self::BearerToken(bearer_token)),
-            (None, None) => Err(ApiError::missing_credentials(
-                "Klako",
-                &["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"],
-            )),
+        if let Some(api_key) = read_env_non_empty("ANTHROPIC_API_KEY")? {
+            return match read_env_non_empty("ANTHROPIC_AUTH_TOKEN")? {
+                Some(bearer_token) => Ok(Self::ApiKeyAndBearer {
+                    api_key,
+                    bearer_token,
+                }),
+                None => Ok(Self::ApiKey(api_key)),
+            };
         }
+        if let Some(bearer_token) = read_env_non_empty("ANTHROPIC_AUTH_TOKEN")? {
+            return Ok(Self::BearerToken(bearer_token));
+        }
+        if let Some(api_key) = read_env_non_empty("GEMINI_API_KEY")? {
+            return Ok(Self::ApiKey(api_key));
+        }
+
+        Err(ApiError::missing_credentials(
+            "Klako",
+            &["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "GEMINI_API_KEY"],
+        ))
     }
 
     #[must_use]
@@ -369,7 +375,7 @@ impl AuthSource {
             Ok(Some(token_set)) => Ok(Self::BearerToken(token_set.access_token)),
             Ok(None) => Err(ApiError::missing_credentials(
                 "Klako",
-                &["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"],
+                &["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "GEMINI_API_KEY"],
             )),
             Err(error) => Err(error),
         }
@@ -412,28 +418,33 @@ where
     if let Some(bearer_token) = read_env_non_empty("ANTHROPIC_AUTH_TOKEN")? {
         return Ok(AuthSource::BearerToken(bearer_token));
     }
+    if let Some(api_key) = read_env_non_empty("GEMINI_API_KEY")? {
+        return Ok(AuthSource::ApiKey(api_key));
+    }
 
-    let Some(token_set) = load_saved_oauth_token()? else {
-        return Err(ApiError::missing_credentials(
+    match load_saved_oauth_token() {
+        Ok(Some(token_set)) => {
+            if !oauth_token_is_expired(&token_set) {
+                return Ok(AuthSource::BearerToken(token_set.access_token));
+            }
+            if token_set.refresh_token.is_none() {
+                return Err(ApiError::ExpiredOAuthToken);
+            }
+
+            let Some(config) = load_oauth_config()? else {
+                return Err(ApiError::Auth(
+                    "saved OAuth token is expired; runtime OAuth config is missing".to_string(),
+                ));
+            };
+            Ok(AuthSource::from(resolve_saved_oauth_token_set(
+                &config, token_set,
+            )?))
+        },
+        _ => Err(ApiError::missing_credentials(
             "Klako",
-            &["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"],
-        ));
-    };
-    if !oauth_token_is_expired(&token_set) {
-        return Ok(AuthSource::BearerToken(token_set.access_token));
+            &["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "GEMINI_API_KEY"],
+        )),
     }
-    if token_set.refresh_token.is_none() {
-        return Err(ApiError::ExpiredOAuthToken);
-    }
-
-    let Some(config) = load_oauth_config()? else {
-        return Err(ApiError::Auth(
-            "saved OAuth token is expired; runtime OAuth config is missing".to_string(),
-        ));
-    };
-    Ok(AuthSource::from(resolve_saved_oauth_token_set(
-        &config, token_set,
-    )?))
 }
 
 fn resolve_saved_oauth_token_set(
@@ -516,7 +527,7 @@ fn read_api_key() -> Result<String, ApiError> {
         .map(ToOwned::to_owned)
         .ok_or(ApiError::missing_credentials(
             "Klako",
-            &["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"],
+            &["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "GEMINI_API_KEY"],
         ))
 }
 
@@ -861,6 +872,7 @@ mod tests {
         std::env::set_var("KLA_CONFIG_HOME", &config_home);
         std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
         std::env::remove_var("ANTHROPIC_API_KEY");
+        std::env::remove_var("GEMINI_API_KEY");
         save_oauth_credentials(&runtime::OAuthTokenSet {
             access_token: "saved-access-token".to_string(),
             refresh_token: Some("refresh".to_string()),
@@ -885,6 +897,7 @@ mod tests {
         std::env::set_var("KLA_CONFIG_HOME", &config_home);
         std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
         std::env::remove_var("ANTHROPIC_API_KEY");
+        std::env::remove_var("GEMINI_API_KEY");
         save_oauth_credentials(&runtime::OAuthTokenSet {
             access_token: "expired-access-token".to_string(),
             refresh_token: Some("refresh-token".to_string()),
@@ -952,6 +965,7 @@ mod tests {
             system: None,
             tools: None,
             tool_choice: None,
+            force_json_schema: None,
             stream: false,
         };
 

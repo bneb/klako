@@ -35,17 +35,55 @@ impl ProviderClient {
         default_auth: Option<AuthSource>,
     ) -> Result<Self, ApiError> {
         let resolved_model = providers::resolve_model_alias(model);
-        match providers::detect_provider_kind(&resolved_model) {
+        let kind = providers::detect_provider_kind(&resolved_model);
+        
+        match kind {
             ProviderKind::KlaApi => Ok(Self::KlaApi(match default_auth {
                 Some(auth) => KlaApiClient::from_auth(auth),
                 None => KlaApiClient::from_env()?,
             })),
-            ProviderKind::Xai => Ok(Self::Xai(OpenAiCompatClient::from_env(
-                OpenAiCompatConfig::xai(),
-            )?)),
-            ProviderKind::OpenAi => Ok(Self::OpenAi(OpenAiCompatClient::from_env(
-                OpenAiCompatConfig::openai(),
-            )?)),
+            ProviderKind::Xai => {
+                if let Some(AuthSource::ApiKey(key)) = default_auth {
+                    Ok(Self::Xai(OpenAiCompatClient::new(key, OpenAiCompatConfig::xai())))
+                } else {
+                    Ok(Self::Xai(OpenAiCompatClient::from_env(
+                        OpenAiCompatConfig::xai(),
+                    )?))
+                }
+            },
+            ProviderKind::OpenAi => {
+                let metadata = providers::metadata_for_model(&resolved_model);
+                let config = if let Some(ref m) = metadata {
+                    OpenAiCompatConfig {
+                        provider_name: if m.auth_env.contains("GEMINI") { "Gemini" } else { "OpenAI" },
+                        api_key_env: m.auth_env,
+                        base_url_env: m.base_url_env,
+                        default_base_url: m.default_base_url,
+                    }
+                } else {
+                    OpenAiCompatConfig::openai()
+                };
+
+                if let Some(auth) = default_auth {
+                    match auth {
+                        AuthSource::ApiKey(key) | AuthSource::BearerToken(key) => {
+                            Ok(Self::OpenAi(OpenAiCompatClient::new(key, config)))
+                        },
+                        AuthSource::ApiKeyAndBearer { api_key, .. } => {
+                            Ok(Self::OpenAi(OpenAiCompatClient::new(api_key, config)))
+                        },
+                        AuthSource::None => {
+                            // If we have a topology, we might not need this client to be valid.
+                            // But for now, let's try to load from env as fallback if possible.
+                            Ok(Self::OpenAi(OpenAiCompatClient::from_env(config).unwrap_or_else(|_| {
+                                OpenAiCompatClient::new("dummy-key-for-topology-fallback", config)
+                            })))
+                        }
+                    }
+                } else {
+                    Ok(Self::OpenAi(OpenAiCompatClient::from_env(config)?))
+                }
+            }
         }
     }
 

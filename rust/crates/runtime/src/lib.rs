@@ -18,7 +18,7 @@ mod session;
 mod usage;
 pub mod workspace;
 
-pub use bash::{execute_bash, BashCommandInput, BashCommandOutput};
+pub use bash::{execute_bash, BashCommandInput, BashCommandOutput, PersistentShell};
 pub use bootstrap::{BootstrapPhase, BootstrapPlan};
 pub use compact::{
     compact_session, estimate_session_tokens, format_compact_summary,

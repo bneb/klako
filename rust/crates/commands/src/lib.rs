@@ -94,6 +94,7 @@ pub fn handle_slash_command(
             session: session.clone(),
         }),
         SlashCommand::Status
+        | SlashCommand::Dream
         | SlashCommand::Branch { .. }
         | SlashCommand::Bughunter { .. }
         | SlashCommand::Worktree { .. }
@@ -487,7 +488,8 @@ mod tests {
         assert!(help.contains("/skills"));
         assert!(help.contains("/loop <objective>"));
         assert!(help.contains("aliases: /swarm"));
-        assert_eq!(slash_command_specs().len(), 29);
+        assert!(help.contains("/dream"));
+        assert_eq!(slash_command_specs().len(), 30);
         assert_eq!(resume_supported_slash_commands().len(), 13);
     }
 

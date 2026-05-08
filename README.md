@@ -1,98 +1,46 @@
-# Klako: Formalizing Autonomous Agency
+# Klako: Tier-1 Autonomous CLI Engine
 
-While the broader ecosystem occupies itself with empirical trial-and-error, we found it mildly amusing to formalize local coding agency into an axiomatic Rust implementation. Klako is our clean-room, safe Rust instantiation of a Claude Code-style local CLI. It provides an undeniably elegant interactive agent shell, seamless one-shot execution, and flawlessly deterministic workspace-aware tool integrations. The profound simplicity of its architecture speaks for itself.
+Klako is a high-performance, local-first agent orchestrator. It is designed to be superior to existing AI CLIs by leveraging deterministic Rust kernels, strategic sub-agent orchestration, and persistent Bayesian memory.
 
-## Getting Started
+## 🚀 System Architecture (V2)
 
-Assuming you possess a stable Rust toolchain and the capability to procure your own Anthropic or Grok API credentials, booting the orchestrator is a trivial endeavor.
+Klako is built on a "World-Kernel" architecture, where complex reasoning is offloaded from the LLM to high-fidelity Rust simulation engines.
 
-Move into the orchestrator boundary:
-```bash
-cd rust
-```
+### **The "Worlds" Ecosystem**
+- **SportsWorld**: SOTA minute-by-minute discrete event simulation for NBA, MLB, UCL, and ATP. Includes tactical modeling, stamina decay, and set-piece gravity.
+- **LogisticsWorld**: Itinerary optimization using TSP heuristics and psychological cognitive load constraints.
+- **ActuarialWorld**: Parallelized Monte Carlo system for risk assessment and Bayesian parameter sampling.
+- **NutritionWorld**: Clinical-grade meal planning with daily diary gap-closure and micronutrient tracking.
+- **DiscoveryWorld & SymbolWorld**: Context-efficient structural mapping and exact semantic code navigation (LSP-lite).
+- **MemoryWorld**: Persistent, key-based long-term brain for global and project-specific priors.
 
-Compile the primary binary:
-```bash
-cargo build --release -p kla-cli
-```
+## 🧠 Strategic Orchestration
+Klako uses a hierarchical delegation model. A primary orchestrator (powered by Gemma 4 26B MoE or Gemini 3.1) delegates specialized tasks to expert sub-agents:
+- **Explore**: Architectural discovery and semantic symbol lookup.
+- **Logistics**: High-precision scheduling and optimization.
+- **Verification**: Red-to-green TDD auditing and idiomatic parity checks.
 
-Initiate the interactive shell:
-```bash
-cargo run --bin kla -- --help
-cargo run --bin kla --
-```
+## 📊 Visual Intelligence
+Klako produces isomorphic visual artifacts. High-density data is rendered natively as **ANSI-rich ASCII charts** in the Terminal and as **Interactive Canvas components** in the Browser Notebook UI.
 
-For those inclined toward isolated deterministic outputs:
-```bash
-cargo run --bin kla -- prompt "explain this monolithic triviality"
-```
+## 🛠 Engineering Excellence (SRE/Staff)
+- **Deterministic**: Every simulation is seed-controlled and perfectly reproducible.
+- **Parallelized**: Utilizing `rayon` for multi-core performance.
+- **Verified**: Strictly TDD-driven with property-based fuzzing via `proptest`.
+- **Safe**: Mandatory "Plan Mode" and structural "Parity Audits" prevent destructive file edits.
 
-If you must persist this architecture globally:
-```bash
-cargo install --path crates/kla-cli --locked
-```
+## 🏗 Build & Launch
 
-## Epistemic Authentication
-
-You are free to authenticate through the CLI interface, or via environment variables if you prefer a more explicit injection of truth:
+Rebuild the system to synchronize the dynamic schemas and modular kernels:
 
 ```bash
-cargo run --bin kla -- login
+cd rust && cargo build --release -p kla-cli
 ```
 
-For Anthropic models:
+Launch the Notebook UI:
 ```bash
-export ANTHROPIC_API_KEY="..."
-export ANTHROPIC_BASE_URL="https://api.anthropic.com"
+./target/release/kla notebook
 ```
 
-For Grok architecture equivalents:
-```bash
-export XAI_API_KEY="..."
-export XAI_BASE_URL="https://api.x.ai"
-```
-
-## Core Interaction Topology
-
-The slash command surface exposes all fundamental topological truths of the session state. Run `kla --help` to witness the complete command registry, natively bypassing undocumented assumptions.
-
-```bash
-# Evaluate delta and converge on truth
-cargo run --bin kla -- prompt "review the latest changes"
-
-# Scaffold invariant configurations
-cargo run --bin kla -- init
-
-# Terminate session persistence
-cargo run --bin kla -- logout
-
-# Resume a previous cognitive state
-cargo run --bin kla -- --resume session.json /status
-```
-
-## Abstract Directory Structure
-
-```text
-.
-├── rust/            # The axiomatic Rust workspace and runtime engine
-├── src/             # Auxiliary python verification and legacy ports
-├── tests/           # Auxiliary python test suites
-├── KLA.md         # Immutable operational theorems for agents
-└── README.md        # The document you are currently reading
-```
-
-## Verification
-
-If you must contribute, kindly avoid undermining our compile-time guarantees. Navigate to the `rust` directory and assert absolute compliance:
-
-```bash
-cd rust
-cargo fmt
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-```
-
-## Axiomatic Truths
-
-- This repository is a clean-room Rust realization of the local-agent paradigm, unequivocally independent from the original Claude Code upstream source.
-- `KLA.md` establishes the absolute operational guidelines. Adhere to it, or expect system invariants to break.
+---
+*Built for absolute perfection and mathematical undeniability.*

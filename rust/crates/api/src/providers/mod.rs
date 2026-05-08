@@ -138,6 +138,33 @@ const MODEL_REGISTRY: &[(&str, ProviderMetadata)] = &[
             default_base_url: openai_compat::DEFAULT_XAI_BASE_URL,
         },
     ),
+    (
+        "gemini-2.5-flash",
+        ProviderMetadata {
+            provider: ProviderKind::OpenAi,
+            auth_env: "GEMINI_API_KEY",
+            base_url_env: "GEMINI_BASE_URL",
+            default_base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
+        },
+    ),
+    (
+        "gemini-3.1-pro-preview",
+        ProviderMetadata {
+            provider: ProviderKind::OpenAi,
+            auth_env: "GEMINI_API_KEY",
+            base_url_env: "GEMINI_BASE_URL",
+            default_base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
+        },
+    ),
+    (
+        "gemini-3.1-flash-lite-preview",
+        ProviderMetadata {
+            provider: ProviderKind::OpenAi,
+            auth_env: "GEMINI_API_KEY",
+            base_url_env: "GEMINI_BASE_URL",
+            default_base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
+        },
+    ),
 ];
 
 #[must_use]
@@ -181,6 +208,14 @@ pub fn metadata_for_model(model: &str) -> Option<ProviderMetadata> {
             default_base_url: openai_compat::DEFAULT_XAI_BASE_URL,
         });
     }
+    if lower.starts_with("gemini") {
+        return Some(ProviderMetadata {
+            provider: ProviderKind::OpenAi,
+            auth_env: "GEMINI_API_KEY",
+            base_url_env: "GEMINI_BASE_URL",
+            default_base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
+        });
+    }
     None
 }
 
@@ -191,6 +226,9 @@ pub fn detect_provider_kind(model: &str) -> ProviderKind {
     }
     if kla_provider::has_auth_from_env_or_saved().unwrap_or(false) {
         return ProviderKind::KlaApi;
+    }
+    if openai_compat::has_api_key("GEMINI_API_KEY") {
+        return ProviderKind::OpenAi;
     }
     if openai_compat::has_api_key("OPENAI_API_KEY") {
         return ProviderKind::OpenAi;

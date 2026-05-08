@@ -203,6 +203,30 @@ fn supported_config_setting(setting: &str) -> Option<ConfigSettingSpec> {
             path: &["teammateMode"],
             options: Some(&["tmux", "in-process", "auto"]),
         },
+        "residency.country" => ConfigSettingSpec {
+            scope: ConfigScope::Settings,
+            kind: ConfigKind::String,
+            path: &["residency", "country"],
+            options: None,
+        },
+        "residency.state" => ConfigSettingSpec {
+            scope: ConfigScope::Settings,
+            kind: ConfigKind::String,
+            path: &["residency", "state"],
+            options: None,
+        },
+        "residency.city" => ConfigSettingSpec {
+            scope: ConfigScope::Settings,
+            kind: ConfigKind::String,
+            path: &["residency", "city"],
+            options: None,
+        },
+        "residency.postalCode" => ConfigSettingSpec {
+            scope: ConfigScope::Settings,
+            kind: ConfigKind::String,
+            path: &["residency", "postalCode"],
+            options: None,
+        },
         _ => return None,
     })
 }

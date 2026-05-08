@@ -59,9 +59,10 @@ impl ProjectContext {
     pub fn discover(
         cwd: impl Into<PathBuf>,
         current_date: impl Into<String>,
+        skills: &[String],
     ) -> std::io::Result<Self> {
         let cwd = cwd.into();
-        let instruction_files = discover_instruction_files(&cwd)?;
+        let instruction_files = discover_instruction_files(&cwd, skills)?;
         Ok(Self {
             cwd,
             current_date: current_date.into(),
@@ -74,8 +75,9 @@ impl ProjectContext {
     pub fn discover_with_git(
         cwd: impl Into<PathBuf>,
         current_date: impl Into<String>,
+        skills: &[String],
     ) -> std::io::Result<Self> {
-        let mut context = Self::discover(cwd, current_date)?;
+        let mut context = Self::discover(cwd, current_date, skills)?;
         context.git_status = read_git_status(&context.cwd);
         context.git_diff = read_git_diff(&context.cwd);
         Ok(context)
@@ -150,6 +152,9 @@ impl SystemPromptBuilder {
         sections.push(get_simple_system_section());
         sections.push(get_simple_doing_tasks_section());
         sections.push(get_actions_section());
+
+        sections.push("### Role & Strategic Orchestration\nYou are a strategic orchestrator. Your own context window is your most precious resource. Do not perform complex calculations or massive file searches yourself. You MUST delegate tasks to specialized sub-agents (e.g., `Logistics`, `Explore`, `Verification`) using the `Delegate` tool to keep your main loop lean.\n\n### Narrative Trust Protocol\nYou MUST provide a concise, one-sentence explanation of your intent or technical rationale immediately BEFORE executing any tool calls. This is essential for transparency and allows the user to intercept potentially destructive or suboptimal actions.\n\n### Long-Term Memory\nYou have access to the `MemoryWorld` tool. Use it to `save_memory` for facts or preferences that should persist across sessions (e.g., user locations, project-specific linting rules, kid's names for logistics). Always `get_memory` at the start of a complex task to check for relevant context.\n\nBefore enacting changes, use the `enter_plan_mode` tool to safely draft your strategy.\n".to_string());
+
         sections.push(SYSTEM_PROMPT_DYNAMIC_BOUNDARY.to_string());
         sections.push(self.environment_section());
         if let Some(project_context) = &self.project_context {
@@ -199,7 +204,7 @@ pub fn prepend_bullets(items: Vec<String>) -> Vec<String> {
     items.into_iter().map(|item| format!(" - {item}")).collect()
 }
 
-fn discover_instruction_files(cwd: &Path) -> std::io::Result<Vec<ContextFile>> {
+fn discover_instruction_files(cwd: &Path, skills: &[String]) -> std::io::Result<Vec<ContextFile>> {
     let mut directories = Vec::new();
     let mut cursor = Some(cwd);
     while let Some(dir) = cursor {
@@ -217,6 +222,12 @@ fn discover_instruction_files(cwd: &Path) -> std::io::Result<Vec<ContextFile>> {
             dir.join(".kla").join("instructions.md"),
         ] {
             push_context_file(&mut files, candidate)?;
+        }
+        for skill in skills {
+            push_context_file(&mut files, dir.join(".kla").join("skills").join(format!("{skill}.md")))?;
+            if let Some(home) = dirs::home_dir() {
+                push_context_file(&mut files, home.join(".klako").join("skills").join(format!("{skill}.md")))?;
+            }
         }
     }
     Ok(dedupe_instruction_files(files))
@@ -416,9 +427,10 @@ pub fn load_system_prompt(
     current_date: impl Into<String>,
     os_name: impl Into<String>,
     os_version: impl Into<String>,
+    skills: &[String],
 ) -> Result<Vec<String>, PromptBuildError> {
     let cwd = cwd.into();
-    let project_context = ProjectContext::discover_with_git(&cwd, current_date.into())?;
+    let project_context = ProjectContext::discover_with_git(&cwd, current_date.into(), skills)?;
     let config = ConfigLoader::default_for(&cwd).load()?;
     Ok(SystemPromptBuilder::new()
         .with_os(os_name, os_version)
@@ -484,6 +496,7 @@ fn get_simple_doing_tasks_section() -> String {
         "If an approach fails, diagnose the failure before switching tactics. Do not bypass safety checks or delete lock files without understanding the root cause.".to_string(),
         "Be careful not to introduce security vulnerabilities such as command injection, XSS, or SQL injection.".to_string(),
         "Report outcomes faithfully: if verification fails or was not run, say so explicitly.".to_string(),
+        "If you run statistical models, simulations, or mathematical computations in Python, try to generate a few relevant graphs when appropriate and save them as images to provide a rich visual summary.".to_string(),
         "If a user asks you to write a prompt, generate code for a complex project (like a video game), or perform a task that seems beyond your standard capabilities, DO NOT refuse or apologize. You are an expert meta-agent. Always provide the requested assistance to the best of your ability.".to_string(),
         "You must NEVER output raw JSON objects in your conversational responses. JSON should ONLY be used strictly when invoking a defined tool according to its schema.".to_string(),
     ]);
@@ -557,7 +570,7 @@ mod tests {
         )
         .expect("write nested instructions");
 
-        let context = ProjectContext::discover(&nested, "2026-03-31").expect("context should load");
+        let context = ProjectContext::discover(&nested, "2026-03-31", &[]).expect("context should load");
         let contents = context
             .instruction_files
             .iter()
@@ -586,7 +599,7 @@ mod tests {
         fs::write(root.join("KLA.md"), "same rules\n\n").expect("write root");
         fs::write(nested.join("KLA.md"), "same rules\n").expect("write nested");
 
-        let context = ProjectContext::discover(&nested, "2026-03-31").expect("context should load");
+        let context = ProjectContext::discover(&nested, "2026-03-31", &[]).expect("context should load");
         assert_eq!(context.instruction_files.len(), 1);
         assert_eq!(
             normalize_instruction_content(&context.instruction_files[0].content),
@@ -631,7 +644,7 @@ mod tests {
         fs::write(root.join("tracked.txt"), "hello").expect("write tracked file");
 
         let context =
-            ProjectContext::discover_with_git(&root, "2026-03-31").expect("context should load");
+            ProjectContext::discover_with_git(&root, "2026-03-31", &[]).expect("context should load");
 
         let status = context.git_status.expect("git status should be present");
         assert!(status.contains("## No commits yet on") || status.contains("## "));
@@ -676,7 +689,7 @@ mod tests {
         fs::write(root.join("tracked.txt"), "hello\nworld\n").expect("rewrite tracked file");
 
         let context =
-            ProjectContext::discover_with_git(&root, "2026-03-31").expect("context should load");
+            ProjectContext::discover_with_git(&root, "2026-03-31", &[]).expect("context should load");
 
         let diff = context.git_diff.expect("git diff should be present");
         assert!(diff.contains("Unstaged changes:"));
@@ -703,7 +716,7 @@ mod tests {
         std::env::set_var("HOME", &root);
         std::env::set_var("KLA_CONFIG_HOME", root.join("missing-home"));
         std::env::set_current_dir(&root).expect("change cwd");
-        let prompt = super::load_system_prompt(&root, "2026-03-31", "linux", "6.8")
+        let prompt = super::load_system_prompt(&root, "2026-03-31", "linux", "6.8", &[])
             .expect("system prompt should load")
             .join(
                 "
@@ -739,7 +752,7 @@ mod tests {
         .expect("write settings");
 
         let project_context =
-            ProjectContext::discover(&root, "2026-03-31").expect("context should load");
+            ProjectContext::discover(&root, "2026-03-31", &[]).expect("context should load");
         let config = ConfigLoader::new(&root, root.join("missing-home"))
             .load()
             .expect("config should load");
@@ -779,7 +792,7 @@ mod tests {
         )
         .expect("write instructions.md");
 
-        let context = ProjectContext::discover(&nested, "2026-03-31").expect("context should load");
+        let context = ProjectContext::discover(&nested, "2026-03-31", &[]).expect("context should load");
         assert!(context
             .instruction_files
             .iter()

@@ -118,9 +118,45 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             return;
         }
 
-        while let Ok(msg) = rx.recv().await {
-            if sender.send(Message::Text(msg.into())).await.is_err() {
-                break;
+        loop {
+            let msg = match rx.recv().await {
+                Ok(m) => m,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            };
+
+            use crate::security_module::NotebookEvent;
+            
+            if let Ok(event) = serde_json::from_str::<NotebookEvent>(&msg) {
+                match event {
+                    NotebookEvent::PlanDelta { payload } => {
+                        // Assignment 1-3: Enforce boundaries, reject script/iframe, serialize securely
+                        if let Ok(sanitized) = crate::security_module::sanitize_and_verify(payload) {
+                            let safe_event = NotebookEvent::PlanDelta { payload: sanitized };
+                            if let Ok(safe_msg) = serde_json::to_string(&safe_event) {
+                                if sender.send(Message::Text(safe_msg.into())).await.is_err() {
+                                    break;
+                                }
+                            }
+                        } else {
+                            // If XSS or size limits fail, we strictly drop the message instead of parsing
+                            continue;
+                        }
+                    },
+                    NotebookEvent::RawOther(value) => {
+                        // Validate JSON format natively through Serde untagged struct repackaging 
+                        if let Ok(safe_msg) = serde_json::to_string(&value) {
+                            if sender.send(Message::Text(safe_msg.into())).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                }
+            } else {
+                // Fails deserialization against schema, blindly forward as fallback.
+                if sender.send(Message::Text(msg.into())).await.is_err() {
+                    break;
+                }
             }
         }
     });

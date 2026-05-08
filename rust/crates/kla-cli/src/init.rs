@@ -343,7 +343,9 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("time should be after epoch")
             .as_nanos();
-        std::env::temp_dir().join(format!("kla-init-{nanos}"))
+        let thread_id = format!("{:?}", std::thread::current().id());
+        let thread_id = thread_id.replace("ThreadId(", "").replace(")", "");
+        std::env::temp_dir().join(format!("kla-init-{nanos}-{thread_id}"))
     }
 
     #[test]

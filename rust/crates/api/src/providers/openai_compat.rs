@@ -32,6 +32,7 @@ pub struct OpenAiCompatConfig {
 
 const XAI_ENV_VARS: &[&str] = &["XAI_API_KEY"];
 const OPENAI_ENV_VARS: &[&str] = &["OPENAI_API_KEY"];
+const GEMINI_ENV_VARS: &[&str] = &["GEMINI_API_KEY"];
 
 impl OpenAiCompatConfig {
     #[must_use]
@@ -53,11 +54,23 @@ impl OpenAiCompatConfig {
             default_base_url: DEFAULT_OPENAI_BASE_URL,
         }
     }
+
+    #[must_use]
+    pub const fn gemini() -> Self {
+        Self {
+            provider_name: "Gemini",
+            api_key_env: "GEMINI_API_KEY",
+            base_url_env: "GEMINI_BASE_URL",
+            default_base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
+        }
+    }
+
     #[must_use]
     pub fn credential_env_vars(self) -> &'static [&'static str] {
         match self.provider_name {
             "xAI" => XAI_ENV_VARS,
             "OpenAI" => OPENAI_ENV_VARS,
+            "Gemini" => GEMINI_ENV_VARS,
             _ => &[],
         }
     }
@@ -640,7 +653,7 @@ fn build_chat_completion_request(request: &MessageRequest) -> Value {
         }));
     }
     for message in &request.messages {
-        messages.extend(translate_message(message));
+        messages.extend(translate_message(message, request.model.as_str()));
     }
 
     let mut payload = json!({
@@ -657,11 +670,22 @@ fn build_chat_completion_request(request: &MessageRequest) -> Value {
     if let Some(tool_choice) = &request.tool_choice {
         payload["tool_choice"] = openai_tool_choice(tool_choice);
     }
+    
+    if let Some(schema) = &request.force_json_schema {
+        payload["response_format"] = json!({
+            "type": "json_schema",
+            "json_schema": {
+                "name": "strict_gbnf_output",
+                "schema": schema,
+                "strict": true
+            }
+        });
+    }
 
     payload
 }
 
-fn translate_message(message: &InputMessage) -> Vec<Value> {
+fn translate_message(message: &InputMessage, model: &str) -> Vec<Value> {
     match message.role.as_str() {
         "assistant" => {
             let mut text = String::new();
@@ -669,25 +693,36 @@ fn translate_message(message: &InputMessage) -> Vec<Value> {
             for block in &message.content {
                 match block {
                     InputContentBlock::Text { text: value } => text.push_str(value),
-                    InputContentBlock::ToolUse { id, name, input } => tool_calls.push(json!({
-                        "id": id,
-                        "type": "function",
-                        "function": {
-                            "name": name,
-                            "arguments": input.to_string(),
+                    InputContentBlock::ToolUse { id, name, input } => {
+                        if model.contains("gemini-3") {
+                            let input_args = if input.is_null() { "{}" } else { &input.to_string() };
+                            text.push_str(&format!("\n<tool_use id=\"{}\" name=\"{}\">\n{}\n</tool_use>", id, name, input_args));
+                        } else {
+                            tool_calls.push(json!({
+                                "id": id,
+                                "type": "function",
+                                "function": {
+                                    "name": name,
+                                    "arguments": input.to_string(),
+                                }
+                            }));
                         }
-                    })),
+                    }
                     InputContentBlock::ToolResult { .. } => {}
                 }
             }
             if text.is_empty() && tool_calls.is_empty() {
                 Vec::new()
             } else {
-                vec![json!({
-                    "role": "assistant",
-                    "content": (!text.is_empty()).then_some(text),
-                    "tool_calls": tool_calls,
-                })]
+                let mut obj = serde_json::Map::new();
+                obj.insert("role".to_string(), json!("assistant"));
+                if !text.is_empty() {
+                    obj.insert("content".to_string(), json!(text));
+                }
+                if !tool_calls.is_empty() {
+                    obj.insert("tool_calls".to_string(), json!(tool_calls));
+                }
+                vec![Value::Object(obj)]
             }
         }
         _ => message
@@ -702,12 +737,21 @@ fn translate_message(message: &InputMessage) -> Vec<Value> {
                     tool_use_id,
                     content,
                     is_error,
-                } => Some(json!({
-                    "role": "tool",
-                    "tool_call_id": tool_use_id,
-                    "content": flatten_tool_result_content(content),
-                    "is_error": is_error,
-                })),
+                } => {
+                    if model.contains("gemini-3") {
+                        Some(json!({
+                            "role": "user",
+                            "content": format!("<tool_result id=\"{}\" is_error=\"{}\">\n{}\n</tool_result>", tool_use_id, is_error, flatten_tool_result_content(content)),
+                        }))
+                    } else {
+                        Some(json!({
+                            "role": "tool",
+                            "tool_call_id": tool_use_id,
+                            "content": flatten_tool_result_content(content),
+                            "is_error": is_error,
+                        }))
+                    }
+                }
                 InputContentBlock::ToolUse { .. } => None,
             })
             .collect(),
@@ -974,6 +1018,7 @@ mod tests {
                 input_schema: json!({"type": "object"}),
             }]),
             tool_choice: Some(ToolChoice::Auto),
+            force_json_schema: None,
             stream: false,
         });
 
@@ -1033,6 +1078,52 @@ mod tests {
             chat_completions_endpoint("https://api.x.ai/v1/chat/completions"),
             "https://api.x.ai/v1/chat/completions"
         );
+    }
+
+    #[test]
+    fn translate_message_flattens_gemini_3_tools_to_text() {
+        let request = MessageRequest {
+            model: "gemini-3.1-flash".to_string(),
+            max_tokens: 64,
+            messages: vec![InputMessage {
+                role: "assistant".to_string(),
+                content: vec![
+                    InputContentBlock::ToolUse {
+                        id: "call_abc".to_string(),
+                        name: "weather".to_string(),
+                        input: json!({"city": "Chicago"}),
+                    },
+                ],
+            }, InputMessage {
+                role: "user".to_string(),
+                content: vec![
+                    InputContentBlock::ToolResult {
+                        tool_use_id: "call_abc".to_string(),
+                        content: vec![ToolResultContentBlock::Text {
+                            text: "Sunny".to_string(),
+                        }],
+                        is_error: false,
+                    },
+                ],
+            }],
+            system: None,
+            tools: None,
+            tool_choice: None,
+            force_json_schema: None,
+            stream: false,
+        };
+
+        let payload = build_chat_completion_request(&request);
+        let assistant_msg = &payload["messages"][0];
+        let user_msg = &payload["messages"][1];
+
+        assert_eq!(assistant_msg["role"], json!("assistant"));
+        assert!(assistant_msg["content"].as_str().unwrap().contains("<tool_use id=\"call_abc\" name=\"weather\">"));
+        assert!(assistant_msg.get("tool_calls").is_none()); // No tool_calls array!
+
+        assert_eq!(user_msg["role"], json!("user"));
+        assert!(user_msg["content"].as_str().unwrap().contains("<tool_result id=\"call_abc\" is_error=\"false\">"));
+        assert!(user_msg["content"].as_str().unwrap().contains("Sunny"));
     }
 
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {

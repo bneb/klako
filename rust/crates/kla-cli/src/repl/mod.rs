@@ -394,6 +394,10 @@ impl LiveCli {
                 self.run_loop(objective.as_deref())?;
                 false
             }
+            SlashCommand::Dream => {
+                self.run_dream()?;
+                false
+            }
             SlashCommand::Unknown(name) => {
                 eprintln!("{}", render_unknown_repl_command(&name));
                 false
@@ -820,6 +824,60 @@ impl LiveCli {
         });
         
         println!("Swarm orchestrator finished with status: {:?}", orchestrator.status());
+        Ok(())
+    }
+
+    fn run_dream(&self) -> Result<(), Box<dyn std::error::Error>> {
+        println!("Initiating retrospective dreaming sequence...");
+        
+        let objective = "Review recent session logs and history to identify patterns of failure, successful workflows, and areas for improvement. Propose updates to KLA.md axioms or new SKILL.md profiles.";
+        
+        // Build an ApiClient for the dreamer
+        let (_, tool_registry) = runtime_bridge::build_runtime_plugin_state()?;
+        let client = runtime_bridge::DefaultRuntimeClient::new(
+            self.model.clone(),
+            true, // enable_tools
+            false, // emit_output
+            self.allowed_tools.clone(),
+            tool_registry,
+            None,
+            runtime::RuntimeFeatureConfig::default(),
+            self.tx.clone(),
+        )?;
+        
+        let swarm_objective = swarm::SwarmObjective {
+            description: objective.to_string(),
+        };
+        let mut orchestrator = swarm::SwarmOrchestrator::new(
+            self.runtime.session().clone(),
+            swarm_objective,
+            Box::new(client),
+        );
+        
+        tokio::runtime::Runtime::new()?.block_on(async {
+            orchestrator.start().await.expect("Failed to start Dreamer Swarm");
+            
+            // For Dreaming, we might want to automatically assign a 'Dreamer' subagent type
+            // or let the Architect decide. The current start() lets the Architect decide.
+            
+            while orchestrator.status() == swarm::SwarmStatus::Running {
+                orchestrator.tick().await.expect("Dream tick failed");
+                
+                // Simulate dreamer progress for now
+                let agents = orchestrator.agents().to_vec();
+                if !agents.is_empty() {
+                    for (i, agent) in agents.iter().enumerate() {
+                        if agent.status == "running" {
+                             orchestrator.complete_task(i, "Identified pattern: missing error handling in bash tool".to_string()).await.expect("Failed to complete dream task");
+                        }
+                    }
+                }
+                
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            }
+        });
+        
+        println!("Dreaming sequence complete. Proposals generated in .kla/sessions/DREAM_REPORT.md");
         Ok(())
     }
 

@@ -12,6 +12,8 @@ pub struct MessageRequest {
     pub tools: Option<Vec<ToolDefinition>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_choice: Option<ToolChoice>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub force_json_schema: Option<Value>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub stream: bool,
 }

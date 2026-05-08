@@ -298,6 +298,7 @@ async fn live_stream_smoke_test() {
             system: None,
             tools: None,
             tool_choice: None,
+            force_json_schema: None,
             stream: false,
         })
         .await
@@ -478,6 +479,7 @@ fn sample_request(stream: bool) -> MessageRequest {
             }),
         }]),
         tool_choice: Some(ToolChoice::Auto),
+        force_json_schema: None,
         stream,
     }
 }

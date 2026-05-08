@@ -79,6 +79,7 @@ impl ContextManager {
             system: None,
             tools: None,
             tool_choice: None,
+            force_json_schema: None,
             stream: true,
         };
 
@@ -203,6 +204,7 @@ mod tests {
             system: None,
             tools: None,
             tool_choice: None,
+            force_json_schema: None,
             stream: false,
         };
 

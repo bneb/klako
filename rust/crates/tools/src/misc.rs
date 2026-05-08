@@ -32,6 +32,26 @@ pub(crate) enum TodoStatus {
 }
 
 #[derive(Debug, Deserialize)]
+pub(crate) struct PlanModeInput {
+    pub reason: String,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct PlanModeOutput {
+    pub status: String,
+    pub message: String,
+    pub warning: String,
+}
+
+pub(crate) fn execute_plan_mode(input: PlanModeInput) -> Result<PlanModeOutput, String> {
+    Ok(PlanModeOutput {
+        status: "Plan Mode Active".to_string(),
+        message: format!("Transitioned to Plan Mode. Reason: {}", input.reason),
+        warning: "You may only use read-only tools (read_file, grep_search) until the plan is approved by the user.".to_string(),
+    })
+}
+
+#[derive(Debug, Deserialize)]
 pub(crate) struct SkillInput {
     pub skill: String,
     pub args: Option<String>,

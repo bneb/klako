@@ -3,8 +3,8 @@ mod config;
 mod misc;
 mod notebook;
 mod web;
-mod worlds;
 mod render;
+mod worlds;
 
 pub use agent::set_telemetry_sink;
 
@@ -557,63 +557,15 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
             required_permission: PermissionMode::DangerFullAccess,
         },
         ToolSpec {
-            name: "TemporalWorld",
-            description: "High-performance temporal engine for time math, holiday lookup, and planning.",
-            input_schema: schema_for_type::<worlds::TemporalWorldInput>(),
-            required_permission: PermissionMode::ReadOnly,
-        },
-        ToolSpec {
-            name: "PhysicsWorld",
-            description: "Deterministic physics engine for unit conversions and kinematic simulations.",
-            input_schema: schema_for_type::<worlds::PhysicsWorldInput>(),
-            required_permission: PermissionMode::ReadOnly,
-        },
-        ToolSpec {
-            name: "WasmWorld",
-            description: "Executes a formal deterministic model via WebAssembly inside a strictly bounded Trytet sovereign sandbox.",
-            input_schema: schema_for_type::<worlds::WasmWorldInput>(),
-            required_permission: PermissionMode::ReadOnly,
-        },
-        ToolSpec {
-            name: "FiscalWorld",
-            description: "High-precision financial engine for tax, loans, and investment analysis.",
-            input_schema: schema_for_type::<worlds::FiscalWorldInput>(),
-            required_permission: PermissionMode::ReadOnly,
-        },
-        ToolSpec {
-            name: "JurisprudenceWorld",
-            description: "Formal logic engine for legal risk analysis and procedural deadline calculation.",
-            input_schema: schema_for_type::<worlds::JurisprudenceWorldInput>(),
-            required_permission: PermissionMode::ReadOnly,
-        },
-        ToolSpec {
-            name: "OptimaWorld",
-            description: "Operations Research (OR) solver for combinatorial math and packing problems.",
-            input_schema: schema_for_type::<worlds::OptimaWorldInput>(),
-            required_permission: PermissionMode::ReadOnly,
-        },
-        ToolSpec {
-            name: "KinematicWorld",
-            description: "Geometric Constraint Solver for strict 2D/3D spatial reasoning and layouts.",
-            input_schema: schema_for_type::<worlds::KinematicWorldInput>(),
-            required_permission: PermissionMode::ReadOnly,
-        },
-        ToolSpec {
-            name: "LogisticsWorld",
-            description: "Routing, scheduling, and optimal to-do lists leveraging heuristic algorithms (TSP/VRP) and cognitive load modeling.",
-            input_schema: schema_for_type::<worlds::LogisticsWorldInput>(),
+            name: "MemoryWorld",
+            description: "Cross-session memory persistence for global facts and project preferences.",
+            input_schema: schema_for_type::<worlds::core::MemoryWorldInput>(),
             required_permission: PermissionMode::ReadOnly,
         },
         ToolSpec {
             name: "DiscoveryWorld",
             description: "Contextual Compaction engine for high-speed structural mapping of codebases (AST/Symbol extraction).",
             input_schema: schema_for_type::<worlds::DiscoveryWorldInput>(),
-            required_permission: PermissionMode::ReadOnly,
-        },
-        ToolSpec {
-            name: "LiveWorld",
-            description: "Secure data ingestion engine for real-time structured API requests (Sports, Weather, Traffic).",
-            input_schema: schema_for_type::<worlds::LiveWorldInput>(),
             required_permission: PermissionMode::ReadOnly,
         },
         ToolSpec {
@@ -626,54 +578,6 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
             name: "ParityWorld",
             description: "Structural parity engine for verifying code idiomaticity, indentation, and naming conventions.",
             input_schema: schema_for_type::<worlds::ParityWorldInput>(),
-            required_permission: PermissionMode::ReadOnly,
-        },
-        ToolSpec {
-            name: "NutritionWorld",
-            description: "Advanced nutritional engine for meal plan optimization, macro/micro-nutrient math, and fridge-inventory-aware diet design.",
-            input_schema: schema_for_type::<worlds::NutritionWorldInput>(),
-            required_permission: PermissionMode::ReadOnly,
-        },
-        ToolSpec {
-            name: "StatWorld",
-            description: "Local sovereign stat ledger powered by SQLite for high-performance coefficient lookup and structured ingestion.",
-            input_schema: schema_for_type::<worlds::StatWorldInput>(),
-            required_permission: PermissionMode::ReadOnly,
-        },
-        ToolSpec {
-            name: "MarketWorld",
-            description: "Quantitative finance kernel for asset price path simulation (GBM) and historical strategy backtesting.",
-            input_schema: schema_for_type::<worlds::MarketWorldInput>(),
-            required_permission: PermissionMode::ReadOnly,
-        },
-        ToolSpec {
-            name: "ElectoralWorld",
-            description: "Political forecasting kernel for Bayesian polling aggregation and Electoral College Monte Carlo simulation.",
-            input_schema: schema_for_type::<worlds::ElectoralWorldInput>(),
-            required_permission: PermissionMode::ReadOnly,
-        },
-        ToolSpec {
-            name: "BayesianWorld",
-            description: "Probabilistic Inference Engine for strict Bayesian updating and calculating exact posterior probabilities.",
-            input_schema: schema_for_type::<worlds::BayesianWorldInput>(),
-            required_permission: PermissionMode::ReadOnly,
-        },
-        ToolSpec {
-            name: "MemoryWorld",
-            description: "Cross-session memory persistence for global facts and project preferences.",
-            input_schema: schema_for_type::<worlds::core::MemoryWorldInput>(),
-            required_permission: PermissionMode::ReadOnly,
-        },
-        ToolSpec {
-            name: "ActuarialWorld",
-            description: "High-precision actuarial engine for risk simulation and probability distributions.",
-            input_schema: schema_for_type::<worlds::ActuarialWorldInput>(),
-            required_permission: PermissionMode::ReadOnly,
-        },
-        ToolSpec {
-            name: "SportsWorld",
-            description: "High-fidelity sports match engine using minute-by-minute discrete event simulation.",
-            input_schema: schema_for_type::<worlds::SportsWorldInput>(),
             required_permission: PermissionMode::ReadOnly,
         },
         ToolSpec {
@@ -789,46 +693,14 @@ pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
             .and_then(|i| to_pretty_json(misc::execute_powershell(i).map_err(|e| e.to_string())?)),
         "Config" => from_value::<config::ConfigInput>(input)
             .and_then(|i| to_pretty_json(config::execute_config(i)?)),
-        "TemporalWorld" => from_value::<worlds::TemporalWorldInput>(input)
-            .and_then(|i| with_metadata(input, |_seed| Ok((worlds::execute_temporal_world(i)?, None)))),
-        "PhysicsWorld" => from_value::<worlds::PhysicsWorldInput>(input)
-            .and_then(|i| with_metadata(input, |_seed| Ok((worlds::execute_physics_world(i)?, None)))),
-        "WasmWorld" => from_value::<worlds::WasmWorldInput>(input)
-            .and_then(|i| with_metadata(input, |_seed| Ok((worlds::execute_wasm_world(i)?, None)))),
-        "FiscalWorld" => from_value::<worlds::FiscalWorldInput>(input)
-            .and_then(|i| with_metadata(input, |_seed| Ok((worlds::execute_fiscal_world(i)?, None)))),
-        "JurisprudenceWorld" => from_value::<worlds::JurisprudenceWorldInput>(input)
-            .and_then(|i| with_metadata(input, |_seed| Ok((worlds::execute_jurisprudence_world(i)?, None)))),
-        "OptimaWorld" => from_value::<worlds::OptimaWorldInput>(input)
-            .and_then(|i| with_metadata(input, |_seed| Ok((worlds::execute_optima_world(i)?, None)))),
-        "KinematicWorld" => from_value::<worlds::KinematicWorldInput>(input)
-            .and_then(|i| with_metadata(input, |_seed| Ok((worlds::execute_kinematic_world(i)?, None)))),
-        "LogisticsWorld" => from_value::<worlds::LogisticsWorldInput>(input)
-            .and_then(|i| with_metadata(input, |seed| worlds::execute_logistics_world(i, seed))),
         "MemoryWorld" => from_value::<worlds::core::MemoryWorldInput>(input)
             .and_then(|i| with_metadata(input, |_seed| Ok((worlds::execute_memory_world(i)?, None)))),
         "DiscoveryWorld" => from_value::<worlds::DiscoveryWorldInput>(input)
             .and_then(|i| with_metadata(input, |_seed| Ok((worlds::execute_discovery_world(i)?, None)))),
-        "LiveWorld" => from_value::<worlds::LiveWorldInput>(input)
-            .and_then(|i| with_metadata(input, |_seed| Ok((worlds::execute_live_world(i)?, None)))),
         "SymbolWorld" => from_value::<worlds::SymbolWorldInput>(input)
             .and_then(|i| with_metadata(input, |_seed| Ok((worlds::execute_symbol_world(i)?, None)))),
         "ParityWorld" => from_value::<worlds::ParityWorldInput>(input)
             .and_then(|i| with_metadata(input, |_seed| Ok((worlds::execute_parity_world(i)?, None)))),
-        "NutritionWorld" => from_value::<worlds::NutritionWorldInput>(input)
-            .and_then(|i| with_metadata(input, |_seed| worlds::execute_nutrition_world(i))),
-        "StatWorld" => from_value::<worlds::StatWorldInput>(input)
-            .and_then(|i| with_metadata(input, |_seed| Ok((worlds::execute_stat_world(i)?, None)))),
-        "MarketWorld" => from_value::<worlds::MarketWorldInput>(input)
-            .and_then(|i| with_metadata(input, |seed| worlds::execute_market_world(i, seed))),
-        "ElectoralWorld" => from_value::<worlds::ElectoralWorldInput>(input)
-            .and_then(|i| with_metadata(input, |seed| worlds::execute_electoral_world(i, seed))),
-        "BayesianWorld" => from_value::<worlds::BayesianWorldInput>(input)
-            .and_then(|i| with_metadata(input, |_seed| Ok((worlds::execute_bayesian_world(i)?, None)))),
-        "ActuarialWorld" => from_value::<worlds::ActuarialWorldInput>(input)
-            .and_then(|i| with_metadata(input, |seed| worlds::execute_actuarial_world(i, seed))),
-        "SportsWorld" => from_value::<worlds::SportsWorldInput>(input)
-            .and_then(|i| with_metadata(input, |seed| worlds::execute_sports_world(i, seed))),
         _ => Err(format!("unsupported tool: {name}")),
     }
 }

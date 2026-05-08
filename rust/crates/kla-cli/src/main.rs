@@ -8,6 +8,7 @@ mod runtime_bridge;
 mod repl;
 mod reporting;
 mod notebook;
+pub mod security_module;
 
 use std::collections::BTreeSet;
 use std::env;
@@ -51,6 +52,7 @@ pub(crate) const INTERNAL_PROGRESS_HEARTBEAT_INTERVAL: Duration = Duration::from
 type AllowedToolSet = BTreeSet<String>;
 
 fn main() {
+    dotenvy::dotenv().ok();
     if let Err(error) = run() {
         eprintln!("{}", reporting::render_cli_error(&error.to_string()));
         std::process::exit(1);
@@ -64,7 +66,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         CliAction::BootstrapPlan => print_bootstrap_plan(),
         CliAction::Agents { args } => repl::LiveCli::print_agents(args.as_deref())?,
         CliAction::Skills { args } => repl::LiveCli::print_skills(args.as_deref())?,
-        CliAction::SystemPrompt { cwd, date } => print_system_prompt(cwd, date),
+        CliAction::SystemPrompt { cwd, date } => print_system_prompt(cwd, date, "L0_thinker".to_string()),
         CliAction::Version => print_version(),
         CliAction::Resume {
             session_path,
@@ -444,12 +446,29 @@ fn print_bootstrap_plan() {
 pub(crate) fn build_system_prompt(
     cwd: &Path,
     date: String,
+    model: &str,
 ) -> Result<Vec<String>, String> {
-    load_system_prompt(cwd, date, env::consts::OS, "unknown").map_err(|e| e.to_string())
+    let mut loaded_skills = Vec::new();
+    if let Ok(config) = runtime::ConfigLoader::default_for(cwd).load() {
+        if let Some(topology) = config.agency_topology() {
+            // Locate the provider entry that corresponds to the given model alias, e.g. "L0_thinker"
+            // The model parameter here might be the model string itself, or the provider key.
+            // In klako, the main CLI launches with a provider key or model name. 
+            // We should match against topology.providers keys.
+            if let Some(provider) = topology.providers.get(model).or_else(|| {
+                // If it wasn't the exact provider key, try to find the provider serving this model
+                topology.providers.values().find(|p| p.model == model || p.engine == model)
+            }) {
+                loaded_skills = provider.skills.clone();
+            }
+        }
+    }
+
+    load_system_prompt(cwd, date, env::consts::OS, "unknown", &loaded_skills).map_err(|e| e.to_string())
 }
 
-fn print_system_prompt(cwd: PathBuf, date: String) {
-    match build_system_prompt(&cwd, date) {
+fn print_system_prompt(cwd: PathBuf, date: String, model: String) {
+    match build_system_prompt(&cwd, date, &model) {
         Ok(sections) => println!("{}", sections.join("\n\n")),
         Err(error) => {
             eprintln!("failed to build system prompt: {error}");

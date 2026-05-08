@@ -258,6 +258,22 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         resume_supported: true,
         category: SlashCommandCategory::Automation,
     },
+    SlashCommandSpec {
+        name: "loop",
+        aliases: &["swarm"],
+        summary: "Orchestrate an autonomous agent swarm to solve a task",
+        argument_hint: Some("<objective>"),
+        resume_supported: false,
+        category: SlashCommandCategory::Automation,
+    },
+    SlashCommandSpec {
+        name: "dream",
+        aliases: &[],
+        summary: "Initiate an autonomous retrospective to identify patterns and propose improvements",
+        argument_hint: None,
+        resume_supported: false,
+        category: SlashCommandCategory::Automation,
+    },
 ];
 
 // ── Slash command enum ───────────────────────────────────────────────
@@ -267,6 +283,10 @@ pub enum SlashCommand {
     Help,
     Status,
     Compact,
+    Dream,
+    Loop {
+        objective: Option<String>,
+    },
     Branch {
         action: Option<String>,
         target: Option<String>,
@@ -350,6 +370,10 @@ impl SlashCommand {
             "help" => Self::Help,
             "status" => Self::Status,
             "compact" => Self::Compact,
+            "dream" => Self::Dream,
+            "loop" | "swarm" => Self::Loop {
+                objective: remainder_after_command(trimmed, command),
+            },
             "branch" => Self::Branch {
                 action: parts.next().map(ToOwned::to_owned),
                 target: parts.next().map(ToOwned::to_owned),

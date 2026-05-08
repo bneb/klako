@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="light">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -17,24 +17,75 @@
         <main id="narrative-pane">
             <header class="pane-header">
                 <span class="brand-wordmark">Ⓚ Klako</span>
-                <button id="theme-toggle" aria-label="Toggle Polarity">◐</button>
+                <div class="pane-controls">
+                    <button id="theme-toggle" class="icon-toggle" aria-label="Toggle Theme">◐</button>
+                    <button id="toggle-swarm" class="icon-toggle" aria-label="Toggle Swarm Mode">🐝 Swarm</button>
+                    <button id="toggle-sprint" class="icon-toggle" aria-label="Toggle Sprint Board">☑ Sprint</button>
+                    <button id="toggle-steerable" class="icon-toggle" aria-label="Toggle Plan Editor">▤ Plan</button>
+                    <button id="toggle-mechanics" class="icon-toggle" aria-label="Toggle Telemetry">⚡ Tlm</button>
+                </div>
             </header>
             <div id="chat-history"></div>
-            <div id="input-zone">
-                <textarea id="prompt-input" placeholder="Initiate sequence..." autofocus></textarea>
-            </div>
         </main>
         
+        <aside id="sprint-pane">
+            <header class="pane-header">
+                <span class="brand-wordmark">Swarm Sprint Board</span>
+                <div class="pane-actions">
+                    <button id="sync-sprint-btn" class="icon-toggle" aria-label="Sync Ledger">↻ Sync</button>
+                    <button class="close-pane-btn icon-btn" aria-label="Close Sprint Board" data-target="sprint-pane">✕</button>
+                </div>
+            </header>
+            <div id="sprint-content">
+                <div id="sprint-grid" class="sprint-grid">
+                    <div class="sprint-column" id="col-open">
+                        <h4>Open</h4>
+                        <div class="task-list"></div>
+                    </div>
+                    <div class="sprint-column" id="col-in-progress">
+                        <h4>In Progress</h4>
+                        <div class="task-list"></div>
+                    </div>
+                    <div class="sprint-column" id="col-done">
+                        <h4>Completed</h4>
+                        <div class="task-list"></div>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
         <aside id="mechanics-pane">
             <header id="router-status">
-                <span id="tier-indicator" class="status-indicator idle"></span>
-                <span id="active-tier">L0_Thinker // Idle</span>
+                <div style="display: flex; align-items: center; gap: 12px;">
+                    <span id="tier-indicator" class="status-indicator idle"></span>
+                    <span id="active-tier">L0_Thinker // Idle</span>
+                </div>
+                <div class="pane-actions">
+                    <button class="close-pane-btn icon-btn" aria-label="Close Telemetry" data-target="mechanics-pane">✕</button>
+                </div>
             </header>
+            <div id="subagent-grid"></div>
             <div id="canvas-sticky-date"></div>
             <div id="canvas-container">
                 <canvas id="telemetry-canvas"></canvas>
             </div>
         </aside>
+
+        <aside id="steerable-pane">
+            <!-- Hidden by default via CSS translation -->
+            <header class="pane-header">
+                <span class="brand-wordmark">Plan Editor</span>
+                <div class="pane-actions">
+                    <button id="copy-plan-btn" class="icon-toggle" aria-label="Copy Plan as Markdown">Copy MD</button>
+                    <button class="close-pane-btn icon-btn" aria-label="Close Plan Editor" data-target="steerable-pane">✕</button>
+                </div>
+            </header>
+            <div id="steerable-content"></div>
+        </aside>
+
+        <div id="input-zone">
+            <textarea id="prompt-input" placeholder="Initiate sequence..." autofocus></textarea>
+        </div>
     </div>
 
     <div id="permission-modal" class="hidden">

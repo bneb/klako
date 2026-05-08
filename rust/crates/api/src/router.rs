@@ -45,14 +45,18 @@ pub struct OpenAiCompatInferenceProvider {
     client: OpenAiCompatClient,
     label: String,
     model: String,
+    engine_name: String,
+    disable_tools: bool,
 }
 
 impl OpenAiCompatInferenceProvider {
-    pub fn new(client: OpenAiCompatClient, label: impl Into<String>, model: String) -> Self {
+    pub fn new(client: OpenAiCompatClient, label: impl Into<String>, model: String, engine_name: String, disable_tools: bool) -> Self {
         Self {
             client,
             label: label.into(),
             model,
+            engine_name,
+            disable_tools,
         }
     }
 }
@@ -64,6 +68,25 @@ impl InferenceProvider for OpenAiCompatInferenceProvider {
     ) -> Pin<Box<dyn Future<Output = Result<Vec<StreamEvent>, ApiError>> + Send + 'a>> {
         let mut specialized_request = request.clone();
         specialized_request.model = self.model.clone();
+        if self.disable_tools {
+            specialized_request.tools = None;
+            specialized_request.tool_choice = None;
+        } else if self.engine_name == "llama_cpp" {
+            // ATLAS Feature Port: Automatically inject `force_json_schema` GBNF constraint 
+            // for local `llama_cpp` models so they are structurally bound to proper JSON format.
+            if let Some(_) = &specialized_request.tools {
+                let schema = serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "arguments": {"type": "object"}
+                    },
+                    "required": ["name", "arguments"]
+                });
+                specialized_request.force_json_schema = Some(schema);
+            }
+        }
+        
         Box::pin(async move {
             let mut stream = self.client.stream_message(&specialized_request).await?;
             let mut events = Vec::new();
@@ -237,20 +260,36 @@ pub fn normalize_json_tool_calls(events: &mut Vec<StreamEvent>) {
                     if let Some(brace_start) = remaining.find('{') {
                         let absolute_start = current_pos + brace_start;
                         
-                        // Balanced brace search
                         let mut brace_level = 0;
                         let mut absolute_end = None;
+                        let mut in_string = false;
+                        let mut is_escaped = false;
                         
                         // We need a char iterator to handle multi-byte chars correctly
                         let mut char_indices = text_to_scan[absolute_start..].char_indices();
                         while let Some((offset, c)) = char_indices.next() {
-                            if c == '{' {
-                                brace_level += 1;
-                            } else if c == '}' {
-                                brace_level -= 1;
-                                if brace_level == 0 {
-                                    absolute_end = Some(absolute_start + offset);
-                                    break;
+                            if !in_string {
+                                if c == '"' {
+                                    in_string = true;
+                                    is_escaped = false;
+                                } else if c == '{' {
+                                    brace_level += 1;
+                                } else if c == '}' {
+                                    brace_level -= 1;
+                                    if brace_level == 0 {
+                                        absolute_end = Some(absolute_start + offset);
+                                        break;
+                                    }
+                                }
+                            } else {
+                                if is_escaped {
+                                    is_escaped = false;
+                                } else if c == '\\' {
+                                    is_escaped = true;
+                                } else if c == '"' {
+                                    in_string = false;
+                                } else {
+                                    is_escaped = false;
                                 }
                             }
                         }
@@ -572,7 +611,7 @@ pub fn build_router_from_topology(
     let mut chain_entries: Vec<(&String, &ProviderEntry)> = topology
         .providers
         .iter()
-        .filter(|(name, _)| *name != "L0_thinker" && *name != "L0_typist")
+        .filter(|(_, entry)| !entry.fallback_for.is_empty())
         .collect();
     chain_entries.sort_by(|(a, _), (b, _)| a.cmp(b));
 
@@ -629,6 +668,8 @@ fn build_inference_provider(
         client,
         name.to_string(),
         entry.model.clone(),
+        entry.engine.clone(),
+        entry.disable_tools.unwrap_or(false),
     )))
 }
 
@@ -747,6 +788,7 @@ mod tests {
             system: None,
             tools: None,
             tool_choice: None,
+            force_json_schema: None,
             stream: false,
         }
     }
@@ -913,6 +955,8 @@ mod tests {
                 api_key: None,
                 capabilities: vec!["reasoning".to_string(), "chat".to_string()],
                 fallback_for: Vec::new(),
+                disable_tools: None,
+                skills: Vec::new(),
             },
         );
         providers.insert(
@@ -923,8 +967,10 @@ mod tests {
                 endpoint: Some("http://localhost:8081/v1".to_string()),
                 api_env_var: None,
                 api_key: None,
-                capabilities: vec!["bash".to_string(), "file_edit".to_string()],
+                capabilities: vec!["bash".to_string(), "file_edit".to_string(), "WebFetch".to_string(), "WebSearch".to_string()],
                 fallback_for: Vec::new(),
+                disable_tools: None,
+                skills: Vec::new(),
             },
         );
         providers.insert(
@@ -937,6 +983,8 @@ mod tests {
                 api_key: None,
                 capabilities: Vec::new(),
                 fallback_for: vec!["L0_thinker".to_string(), "L0_typist".to_string()],
+                disable_tools: None,
+                skills: Vec::new(),
             },
         );
 
@@ -951,6 +999,8 @@ mod tests {
         assert!(router.is_ok());
         let router = router.unwrap();
         assert_eq!(router.tier_count(), 3); // thinker + typist + L1
+        assert!(router.typist_capabilities.contains("WebFetch"));
+        assert!(router.typist_capabilities.contains("WebSearch"));
     }
 
     #[tokio::test]
@@ -969,7 +1019,7 @@ mod tests {
             }
         ).with_base_url(&base_url);
         
-        let provider = OpenAiCompatInferenceProvider::new(client, "L0", "deepseek-r1".to_string());
+        let provider = OpenAiCompatInferenceProvider::new(client, "L0", "deepseek-r1".to_string(), "".to_string(), false);
         
         tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();

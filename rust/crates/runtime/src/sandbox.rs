@@ -3,6 +3,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub mod reaper;
+pub mod worktree;
+pub mod trytet_jail;
+pub mod b4mal;
 
 use serde::{Deserialize, Serialize};
 

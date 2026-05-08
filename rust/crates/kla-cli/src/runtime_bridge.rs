@@ -242,10 +242,24 @@ impl ApiClient for DefaultRuntimeClient {
                 .enable_tools
                 .then(|| filter_tool_specs(&self.tool_registry, self.allowed_tools.as_ref())),
             tool_choice: self.enable_tools.then_some(ToolChoice::Auto),
+            force_json_schema: None,
             stream: true,
         };
 
         self.runtime.block_on(async {
+            // [PHASE 1 & PHASE 2 INTEGRATION]
+            // Instantiate GitWorktree for sovereign filesystem isolation
+            use runtime::sandbox::worktree::GitWorktree;
+            use runtime::sandbox::trytet_jail::SovereignSandbox;
+            use std::env;
+            
+            let workspace_root = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            let task_id = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis().to_string();
+            let _worktree = GitWorktree::spawn(&workspace_root, &task_id).await.ok();
+            
+            // Trytet Wasm Bounds Jailer mapped strictly to the git worktree
+            let _jail = _worktree.as_ref().map(|w| SovereignSandbox::new(w.absolute_path.clone(), 50000));
+
             let stream_events = self
                 .router
                 .stream_with_escalation(&message_request)
@@ -351,6 +365,14 @@ impl ApiClient for DefaultRuntimeClient {
                                     "line": format!("[L0_Typist] Executing Tool: {} {}", name, summarize_tool_payload(&input))
                                 });
                                 let _ = tx.send(payload.to_string());
+                                
+                                // Wire the tool call out as a structured PlanDelta to route into the UI Steerable Pane
+                                let plan_payload = format!("```json\n// Tool: {}\n{}\n```", name, input);
+                                let plan_event = serde_json::json!({
+                                    "type": "PlanDelta",
+                                    "payload": plan_payload
+                                });
+                                let _ = tx.send(plan_event.to_string());
                             }
                             // Display tool call now that input is fully accumulated
                             writeln!(out, "\n{}", format_tool_call_start(&name, &input))

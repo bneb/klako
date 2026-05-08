@@ -381,6 +381,7 @@ fn sample_request(stream: bool) -> MessageRequest {
             }),
         }]),
         tool_choice: Some(ToolChoice::Auto),
+        force_json_schema: None,
         stream,
     }
 }

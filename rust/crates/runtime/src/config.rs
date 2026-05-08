@@ -45,6 +45,14 @@ pub struct RuntimePluginConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Residency {
+    pub country: Option<String>,
+    pub state: Option<String>,
+    pub city: Option<String>,
+    pub postal_code: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RuntimeFeatureConfig {
     hooks: RuntimeHookConfig,
     plugins: RuntimePluginConfig,
@@ -54,6 +62,7 @@ pub struct RuntimeFeatureConfig {
     permission_mode: Option<ResolvedPermissionMode>,
     sandbox: SandboxConfig,
     agency_topology: Option<AgencyTopology>,
+    residency: Residency,
 }
 
 /// Multi-tiered inference routing topology from `.kla.json`.
@@ -80,6 +89,8 @@ pub struct ProviderEntry {
     pub api_key: Option<String>,
     pub capabilities: Vec<String>,
     pub fallback_for: Vec<String>,
+    pub disable_tools: Option<bool>,
+    pub skills: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -222,32 +233,50 @@ impl ConfigLoader {
 
     #[must_use]
     pub fn discover(&self) -> Vec<ConfigEntry> {
+        let mut entries = Vec::new();
+
+        // 1. User config
         let user_legacy_path = self.config_home.parent().map_or_else(
             || PathBuf::from(".kla.json"),
             |parent| parent.join(".kla.json"),
         );
-        vec![
-            ConfigEntry {
-                source: ConfigSource::User,
-                path: user_legacy_path,
-            },
-            ConfigEntry {
-                source: ConfigSource::User,
-                path: self.config_home.join("settings.json"),
-            },
-            ConfigEntry {
-                source: ConfigSource::Project,
-                path: self.cwd.join(".kla.json"),
-            },
-            ConfigEntry {
-                source: ConfigSource::Project,
-                path: self.cwd.join(".kla").join("settings.json"),
-            },
-            ConfigEntry {
-                source: ConfigSource::Local,
-                path: self.cwd.join(".kla").join("settings.local.json"),
-            },
-        ]
+        entries.push(ConfigEntry {
+            source: ConfigSource::User,
+            path: user_legacy_path,
+        });
+        entries.push(ConfigEntry {
+            source: ConfigSource::User,
+            path: self.config_home.join("settings.json"),
+        });
+
+        // 2. Project config (upward search)
+        let mut curr = Some(self.cwd.as_path());
+        while let Some(path) = curr {
+            let kla_json = path.join(".kla.json");
+            if kla_json.exists() {
+                entries.push(ConfigEntry {
+                    source: ConfigSource::Project,
+                    path: kla_json,
+                });
+            }
+            let kla_settings = path.join(".kla").join("settings.json");
+            if kla_settings.exists() {
+                entries.push(ConfigEntry {
+                    source: ConfigSource::Project,
+                    path: kla_settings,
+                });
+            }
+            let kla_local = path.join(".kla").join("settings.local.json");
+            if kla_local.exists() {
+                entries.push(ConfigEntry {
+                    source: ConfigSource::Local,
+                    path: kla_local,
+                });
+            }
+            curr = path.parent();
+        }
+
+        entries
     }
 
     pub fn load(&self) -> Result<RuntimeConfig, ConfigError> {
@@ -255,7 +284,8 @@ impl ConfigLoader {
         let mut loaded_entries = Vec::new();
         let mut mcp_servers = BTreeMap::new();
 
-        for entry in self.discover() {
+        let entries = self.discover();
+        for entry in entries {
             let Some(value) = read_optional_json_object(&entry.path)? else {
                 continue;
             };
@@ -265,6 +295,7 @@ impl ConfigLoader {
         }
 
         let merged_value = JsonValue::Object(merged.clone());
+        println!("DEBUG ConfigLoader::load: merged {} entries, has agency_topology={}", loaded_entries.len(), merged_value.as_object().and_then(|o| o.get("agency_topology")).is_some());
 
         let feature_config = RuntimeFeatureConfig {
             hooks: parse_optional_hooks_config(&merged_value)?,
@@ -277,6 +308,7 @@ impl ConfigLoader {
             permission_mode: parse_optional_permission_mode(&merged_value)?,
             sandbox: parse_optional_sandbox_config(&merged_value)?,
             agency_topology: parse_optional_agency_topology(&merged_value)?,
+            residency: parse_optional_residency(&merged_value)?,
         };
 
         Ok(RuntimeConfig {
@@ -361,6 +393,11 @@ impl RuntimeConfig {
     pub fn agency_topology(&self) -> Option<&AgencyTopology> {
         self.feature_config.agency_topology.as_ref()
     }
+
+    #[must_use]
+    pub fn residency(&self) -> &Residency {
+        &self.feature_config.residency
+    }
 }
 
 impl RuntimeFeatureConfig {
@@ -414,6 +451,11 @@ impl RuntimeFeatureConfig {
     #[must_use]
     pub fn agency_topology(&self) -> Option<&AgencyTopology> {
         self.agency_topology.as_ref()
+    }
+
+    #[must_use]
+    pub fn residency(&self) -> &Residency {
+        &self.residency
     }
 }
 
@@ -545,13 +587,9 @@ fn read_optional_json_object(
 
     let parsed = match JsonValue::parse(&contents) {
         Ok(parsed) => parsed,
-        Err(error) if is_legacy_config => return Ok(None),
         Err(error) => return Err(ConfigError::Parse(format!("{}: {error}", path.display()))),
     };
     let Some(object) = parsed.as_object() else {
-        if is_legacy_config {
-            return Ok(None);
-        }
         return Err(ConfigError::Parse(format!(
             "{}: top-level settings value must be a JSON object",
             path.display()
@@ -760,16 +798,21 @@ fn parse_optional_agency_topology(
         let fallback_for =
             optional_string_array(entry_obj, "fallback_for", &entry_context)?
                 .unwrap_or_default();
+        let disable_tools = optional_bool(entry_obj, "disable_tools", &entry_context)?;
+        let skills =
+            optional_string_array(entry_obj, "skills", &entry_context)?.unwrap_or_default();
         providers.insert(
             name.clone(),
             ProviderEntry {
                 engine,
                 model,
                 endpoint,
-            api_env_var,
-            api_key,
-            capabilities,
+                api_env_var,
+                api_key,
+                capabilities,
                 fallback_for,
+                disable_tools,
+                skills,
             },
         );
     }
@@ -780,6 +823,22 @@ fn parse_optional_agency_topology(
         max_parse_retries,
         providers,
     }))
+}
+
+fn parse_optional_residency(root: &JsonValue) -> Result<Residency, ConfigError> {
+    let Some(object) = root.as_object() else {
+        return Ok(Residency::default());
+    };
+    let Some(residency_value) = object.get("residency") else {
+        return Ok(Residency::default());
+    };
+    let residency = expect_object(residency_value, "merged settings.residency")?;
+    Ok(Residency {
+        country: optional_string(residency, "country", "merged settings.residency")?.map(str::to_string),
+        state: optional_string(residency, "state", "merged settings.residency")?.map(str::to_string),
+        city: optional_string(residency, "city", "merged settings.residency")?.map(str::to_string),
+        postal_code: optional_string(residency, "postalCode", "merged settings.residency")?.map(str::to_string),
+    })
 }
 
 fn parse_optional_oauth_config(
@@ -1446,7 +1505,8 @@ mod tests {
                     "engine": "gemini",
                     "model": "gemini-2.5-pro",
                     "api_env_var": "GEMINI_API_KEY",
-                    "fallback_for": ["L2_standard"]
+                    "fallback_for": ["L2_standard"],
+                    "skills": ["web_search", "data_analysis"]
                   },
                   "L4_frontier": {
                     "engine": "gemini",

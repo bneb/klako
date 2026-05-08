@@ -5,7 +5,6 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tokio::process::Command as TokioCommand;
-use tokio::runtime::Builder;
 use tokio::time::timeout;
 
 use crate::sandbox::{
@@ -13,6 +12,143 @@ use crate::sandbox::{
     SandboxConfig, SandboxStatus, reaper::SandboxGuard,
 };
 use crate::ConfigLoader;
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::Mutex as TokioMutex;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+static BASH_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+
+fn bash_runtime() -> &'static tokio::runtime::Runtime {
+    BASH_RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap()
+    })
+}
+
+static PERSISTENT_SHELL: OnceLock<TokioMutex<Option<PersistentShell>>> = OnceLock::new();
+
+fn persistent_shell() -> &'static TokioMutex<Option<PersistentShell>> {
+    PERSISTENT_SHELL.get_or_init(|| TokioMutex::new(None))
+}
+
+static DELIMITER_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+fn next_delimiter() -> String {
+    let micros = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros();
+    let count = DELIMITER_COUNTER.fetch_add(1, Ordering::SeqCst);
+    format!("__KLAKO_DELIM_{}_{}__", micros, count)
+}
+
+async fn read_until_delimiter(
+    stream: &mut (impl tokio::io::AsyncRead + std::marker::Unpin),
+    delimiter: &str,
+) -> std::io::Result<(String, String)> {
+    let mut buf = vec![0; 1024];
+    let mut captured_bytes = Vec::new();
+    let delim_bytes = delimiter.as_bytes();
+    
+    loop {
+        let n = stream.read(&mut buf).await?;
+        if n == 0 {
+            // EOF reached without delimiter
+            let out = String::from_utf8_lossy(&captured_bytes).into_owned();
+            return Ok((out, "".to_string()));
+        }
+        captured_bytes.extend_from_slice(&buf[..n]);
+        
+        let cap_len = captured_bytes.len();
+        let delim_len = delim_bytes.len();
+        
+        if cap_len >= delim_len {
+            // Check if delimiter exists in the captured bytes so far
+            if let Some(pos) = captured_bytes.windows(delim_len).position(|w| w == delim_bytes) {
+                // Determine boundaries
+                let col_idx = pos + delim_len;
+                if col_idx < cap_len && captured_bytes[col_idx] == b':' {
+                    let start = col_idx + 1;
+                    if let Some(nl_offset) = captured_bytes[start..].iter().position(|&b| b == b'\n') {
+                        let nl = start + nl_offset;
+                        let code_bytes = &captured_bytes[start..nl];
+                        let code_str = String::from_utf8_lossy(code_bytes).trim().to_string();
+                        
+                        // Output is everything before the delimiter
+                        let mut out = String::from_utf8_lossy(&captured_bytes[..pos]).into_owned();
+                        if out.ends_with('\n') {
+                            out.pop();
+                        }
+                        
+                        return Ok((out, code_str));
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub struct PersistentShell {
+    _child: tokio::process::Child,
+    stdin: tokio::process::ChildStdin,
+    stdout: tokio::process::ChildStdout,
+    stderr: tokio::process::ChildStderr,
+}
+
+impl PersistentShell {
+    pub fn spawn() -> std::io::Result<Self> {
+        let mut child = tokio::process::Command::new("bash")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()?;
+
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let stderr = child.stderr.take().unwrap();
+
+        Ok(Self { _child: child, stdin, stdout, stderr })
+    }
+
+    pub async fn execute(&mut self, command: &str, timeout_ms: Option<u64>) -> std::io::Result<(String, String, Option<i32>)> {
+        let out_del = next_delimiter();
+        let err_del = next_delimiter();
+        let payload = format!(
+            "{{ {} ; }} \n_K_ST=$?\necho \"{}:$_K_ST\"\necho \"{}:$_K_ST\" >&2\n",
+            command, out_del, err_del
+        );
+
+        self.stdin.write_all(payload.as_bytes()).await?;
+        self.stdin.flush().await?;
+
+        let stdout_fut = read_until_delimiter(&mut self.stdout, &out_del);
+        let stderr_fut = read_until_delimiter(&mut self.stderr, &err_del);
+
+        let result = if let Some(t) = timeout_ms {
+            match tokio::time::timeout(std::time::Duration::from_millis(t), async { tokio::join!(stdout_fut, stderr_fut) }).await {
+                Ok(res) => res,
+                Err(_) => return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "Command timed out"))
+            }
+        } else {
+            tokio::join!(stdout_fut, stderr_fut)
+        };
+
+        let (out_res, err_res) = result;
+        let (stdout, code_str) = out_res?;
+        let (stderr, _) = err_res?;
+
+        let code = if !code_str.is_empty() {
+            code_str.parse::<i32>().ok()
+        } else {
+            // EOF hit. Check if shell exited
+            match self._child.try_wait() {
+                Ok(Some(status)) => status.code().or(Some(-1)),
+                _ => None,
+            }
+        };
+        
+        Ok((stdout, stderr, code))
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BashCommandInput {
@@ -95,8 +231,69 @@ pub fn execute_bash(input: BashCommandInput) -> io::Result<BashCommandOutput> {
         });
     }
 
-    let runtime = Builder::new_current_thread().enable_all().build()?;
-    runtime.block_on(execute_bash_async(input, sandbox_status, cwd))
+    if !sandbox_status.filesystem_active {
+        return bash_runtime().block_on(async {
+            let mut guard = persistent_shell().lock().await;
+            if guard.is_none() {
+                *guard = Some(PersistentShell::spawn()?);
+            }
+            let shell = guard.as_mut().unwrap();
+            
+            match shell.execute(&input.command, input.timeout).await {
+                Ok((stdout, stderr, code)) => {
+                    let return_code_interpretation = code.and_then(|c| if c == 0 { None } else { Some(format!("exit_code:{}", c)) });
+                    
+                    // Basic heuristic to attach pwd system note if command resembles directory change
+                    let no_output_expected = Some(stdout.trim().is_empty() && stderr.trim().is_empty());
+                    
+                    Ok(BashCommandOutput {
+                        stdout,
+                        stderr,
+                        raw_output_path: None,
+                        interrupted: false,
+                        is_image: None,
+                        background_task_id: None,
+                        backgrounded_by_user: None,
+                        assistant_auto_backgrounded: None,
+                        dangerously_disable_sandbox: input.dangerously_disable_sandbox,
+                        return_code_interpretation,
+                        no_output_expected,
+                        structured_content: None,
+                        persisted_output_path: None,
+                        persisted_output_size: None,
+                        sandbox_status: Some(sandbox_status),
+                    })
+                }
+                Err(e) => {
+                    // If timeout or failure, shell might be poisoned. Nuke it.
+                    *guard = None;
+                    if e.kind() == io::ErrorKind::TimedOut {
+                        Ok(BashCommandOutput {
+                            stdout: String::new(),
+                            stderr: format!("Command exceeded timeout of {} ms", input.timeout.unwrap_or(0)),
+                            raw_output_path: None,
+                            interrupted: true,
+                            is_image: None,
+                            background_task_id: None,
+                            backgrounded_by_user: None,
+                            assistant_auto_backgrounded: None,
+                            dangerously_disable_sandbox: input.dangerously_disable_sandbox,
+                            return_code_interpretation: Some("timeout".to_string()),
+                            no_output_expected: Some(true),
+                            structured_content: None,
+                            persisted_output_path: None,
+                            persisted_output_size: None,
+                            sandbox_status: Some(sandbox_status),
+                        })
+                    } else {
+                        Err(e)
+                    }
+                }
+            }
+        });
+    }
+
+    bash_runtime().block_on(execute_bash_async(input, sandbox_status, cwd))
 }
 
 async fn execute_bash_async(

@@ -7,3 +7,17 @@ archive/
 .kla/sessions/
 .kla-agents/
 .kla.json
+
+# Sandbox and tmp dirs
+.sandbox-home/
+.sandbox-tmp/
+tmp/
+
+# OS/Editor
+.DS_Store
+*.swp
+*.pyc
+
+# Temporary simulation files
+simulate_game.py
+simulation_results.png
