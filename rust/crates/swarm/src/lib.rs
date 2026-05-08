@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SwarmStatus {
     Idle,
+    Planning,
     Running,
     Completed,
     Failed(String),
@@ -77,7 +78,7 @@ impl SwarmOrchestrator {
     }
 
     pub async fn start(&mut self) -> Result<(), String> {
-        self.status = SwarmStatus::Running;
+        self.status = SwarmStatus::Planning;
         self.emit_ledger_update();
         
         let planning_prompt = format!(
@@ -130,6 +131,39 @@ impl SwarmOrchestrator {
                 verification_tool: None,
                 verification_input: None,
             });
+        }
+        
+        // Write the plan to PLAN.md
+        std::fs::create_dir_all(".kla/sessions").ok();
+        let mut plan_content = format!("# Swarm Execution Plan\n\n**Objective:** {}\n\n*Edit the tasks below. Each line starting with `- ` is a task. Save the file and approve in the UI/CLI to begin execution.*\n\n", self.objective.description);
+        for task in &self.tasks {
+            plan_content.push_str(&format!("- {}\n", task.description));
+        }
+        std::fs::write(".kla/sessions/PLAN.md", plan_content).map_err(|e| e.to_string())?;
+        
+        self.emit_ledger_update();
+        Ok(())
+    }
+
+    pub async fn approve_plan(&mut self) -> Result<(), String> {
+        self.status = SwarmStatus::Running;
+        
+        // Read PLAN.md and rebuild tasks
+        if let Ok(content) = std::fs::read_to_string(".kla/sessions/PLAN.md") {
+            let mut new_tasks = Vec::new();
+            for line in content.lines() {
+                if let Some(desc) = line.strip_prefix("- ") {
+                    new_tasks.push(SwarmTask {
+                        description: desc.trim().to_string(),
+                        status: SwarmTaskStatus::Pending,
+                        verification_tool: None,
+                        verification_input: None,
+                    });
+                }
+            }
+            if !new_tasks.is_empty() {
+                self.tasks = new_tasks;
+            }
         }
         
         self.emit_ledger_update();

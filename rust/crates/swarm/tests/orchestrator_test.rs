@@ -23,8 +23,11 @@ async fn test_swarm_orchestrator_full_lifecycle() {
     assert_eq!(orchestrator.status(), SwarmStatus::Idle);
     
     orchestrator.start().await.expect("Start failed");
-    assert_eq!(orchestrator.status(), SwarmStatus::Running);
+    assert_eq!(orchestrator.status(), SwarmStatus::Planning);
     assert!(!orchestrator.tasks().is_empty());
+    
+    orchestrator.approve_plan().await.expect("Approve failed");
+    assert_eq!(orchestrator.status(), SwarmStatus::Running);
     
     orchestrator.tick().await.expect("Tick failed");
     assert!(orchestrator.tasks().iter().any(|t| t.status == SwarmTaskStatus::Running));
@@ -44,6 +47,7 @@ async fn test_swarm_orchestrator_empirical_verification_lifecycle() {
     };
     let mut orchestrator = SwarmOrchestrator::new(session, objective, Box::new(MockApiClient));
     orchestrator.start().await.expect("Start failed");
+    orchestrator.approve_plan().await.expect("Approve failed");
     
     // Manually set a verification tool for the first task
     if let Some(task) = orchestrator.tasks_mut().get_mut(0) {
@@ -72,6 +76,7 @@ async fn test_swarm_orchestrator_verification_failure() {
     };
     let mut orchestrator = SwarmOrchestrator::new(session, objective, Box::new(MockApiClient));
     orchestrator.start().await.expect("Start failed");
+    orchestrator.approve_plan().await.expect("Approve failed");
     
     // Manually set a verification tool that will fail (invalid tool name)
     if let Some(task) = orchestrator.tasks_mut().get_mut(0) {

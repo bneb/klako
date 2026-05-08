@@ -801,6 +801,23 @@ impl LiveCli {
         
         tokio::runtime::Runtime::new()?.block_on(async {
             orchestrator.start().await.expect("Failed to start SwarmOrchestrator");
+            
+            // Wait for plan approval
+            if orchestrator.status() == swarm::SwarmStatus::Planning {
+                println!("\n[Architect] Plan generated and written to .kla/sessions/PLAN.md");
+                println!("Please review and edit the plan. You can use the Notebook UI Plan Editor.");
+                println!("Type 'approve' to execute the swarm, or 'cancel' to abort: ");
+                
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input).expect("Failed to read input");
+                if input.trim().to_lowercase() == "approve" {
+                    orchestrator.approve_plan().await.expect("Failed to approve plan");
+                } else {
+                    println!("Swarm execution cancelled.");
+                    return;
+                }
+            }
+
             while orchestrator.status() == swarm::SwarmStatus::Running {
                 // Tick will try to spawn subagents for pending tasks
                 orchestrator.tick().await.expect("Tick failed");
