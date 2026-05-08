@@ -101,6 +101,11 @@ impl WorkspaceCheckpoint {
 
     /// Executes literal instantaneous Undo dropping the user's workspace back to the `snapshot()` tracker.
     pub async fn restore(&self) -> std::io::Result<()> {
+        self.restore_commits(0).await
+    }
+
+    /// Restores the workspace by rewinding a specific number of snapshot commits.
+    pub async fn restore_commits(&self, rewinds: usize) -> std::io::Result<()> {
         // Discard any untracked untamed trash generated
         let clean_status = self.git().args(["clean", "-df"]).status().await?;
         if !clean_status.success() {
@@ -110,8 +115,8 @@ impl WorkspaceCheckpoint {
             ));
         }
 
-        // Hard wipe back to the pristine tracking HEAD natively
-        let reset_status = self.git().args(["reset", "--hard", "HEAD"]).status().await?;
+        let target = format!("HEAD~{}", rewinds);
+        let reset_status = self.git().args(["reset", "--hard", &target]).status().await?;
         if !reset_status.success() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Other,

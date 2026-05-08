@@ -97,6 +97,7 @@ pub fn handle_slash_command(
         | SlashCommand::Retro
         | SlashCommand::Design { .. }
         | SlashCommand::Map { .. }
+        | SlashCommand::Rewind { .. }
         | SlashCommand::Review { .. }
         | SlashCommand::Branch { .. }
         | SlashCommand::Bughunter { .. }
@@ -495,9 +496,10 @@ mod tests {
         assert!(help.contains("/retro"));
         assert!(help.contains("/design <feature>"));
         assert!(help.contains("/map [path]"));
+        assert!(help.contains("/rewind <task-index>"));
         assert!(help.contains("/review <path>"));
         assert!(help.contains("/settings"));
-        assert_eq!(slash_command_specs().len(), 34);
+        assert_eq!(slash_command_specs().len(), 35);
         assert_eq!(resume_supported_slash_commands().len(), 14);
     }
 

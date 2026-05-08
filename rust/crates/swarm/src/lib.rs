@@ -41,6 +41,8 @@ pub struct SwarmAgent {
     pub task_index: Option<usize>,
 }
 
+use runtime::workspace::checkpoint::WorkspaceCheckpoint;
+
 pub struct SwarmOrchestrator {
     session: Session,
     objective: SwarmObjective,
@@ -48,10 +50,12 @@ pub struct SwarmOrchestrator {
     tasks: Vec<SwarmTask>,
     agents: Vec<SwarmAgent>,
     provider: Box<dyn ApiClient>,
+    checkpoint: Option<WorkspaceCheckpoint>,
 }
 
 impl SwarmOrchestrator {
-    pub fn new(session: Session, objective: SwarmObjective, provider: Box<dyn ApiClient>) -> Self {
+    pub async fn new(session: Session, objective: SwarmObjective, provider: Box<dyn ApiClient>) -> Self {
+        let checkpoint = WorkspaceCheckpoint::new(".").await.ok();
         Self {
             session,
             objective,
@@ -59,6 +63,7 @@ impl SwarmOrchestrator {
             tasks: Vec::new(),
             agents: Vec::new(),
             provider,
+            checkpoint,
         }
     }
 
@@ -178,18 +183,19 @@ impl SwarmOrchestrator {
             return Ok(());
         }
 
-        // Budget check
-        if let Some(budget) = self.objective.budget {
-            let mut total_cost = 0.0;
+        // Budget check (in Millions of Tokens)
+        if let Some(budget_m_tokens) = self.objective.budget {
+            let mut total_tokens = 0;
             for agent in &self.agents {
                 let session_path = std::path::PathBuf::from(format!(".kla/sessions/session-{}.json", agent.id));
                 if let Ok(session) = runtime::Session::load_from_path(&session_path) {
                     let tracker = runtime::UsageTracker::from_session(&session);
-                    total_cost += tracker.cumulative_usage().estimate_cost_usd().total_cost_usd();
+                    total_tokens += tracker.cumulative_usage().total_tokens();
                 }
             }
-            if total_cost > budget {
-                self.status = SwarmStatus::Failed(format!("Budget exceeded: ${:.2} / ${:.2}", total_cost, budget));
+            let total_m_tokens = (total_tokens as f64) / 1_000_000.0;
+            if total_m_tokens > budget_m_tokens {
+                self.status = SwarmStatus::Failed(format!("Token budget exceeded: {:.2}M / {:.2}M tokens", total_m_tokens, budget_m_tokens));
                 self.emit_ledger_update();
                 return Ok(());
             }
@@ -197,6 +203,7 @@ impl SwarmOrchestrator {
 
         // 1. Check for tasks in Verifying state to run deterministic tools
         let mut verifications = Vec::new();
+        let mut snapshot_needed = false;
         for (index, task) in self.tasks.iter().enumerate() {
             if task.status == SwarmTaskStatus::Verifying {
                 if let Some(tool_name) = &task.verification_tool {
@@ -205,6 +212,7 @@ impl SwarmOrchestrator {
                     match tools::execute_tool(tool_name, input) {
                         Ok(_) => {
                             verifications.push((index, SwarmTaskStatus::Completed));
+                            snapshot_needed = true;
                         }
                         Err(err) => {
                             verifications.push((index, SwarmTaskStatus::Failed(format!("Verification failed: {}", err))));
@@ -212,6 +220,7 @@ impl SwarmOrchestrator {
                     }
                 } else {
                     verifications.push((index, SwarmTaskStatus::Completed));
+                    snapshot_needed = true;
                 }
             }
         }
@@ -219,6 +228,12 @@ impl SwarmOrchestrator {
         for (index, new_status) in verifications {
             if let Some(task) = self.tasks.get_mut(index) {
                 task.status = new_status;
+            }
+        }
+
+        if snapshot_needed {
+            if let Some(cp) = &self.checkpoint {
+                let _ = cp.snapshot().await;
             }
         }
 
@@ -260,6 +275,9 @@ impl SwarmOrchestrator {
                 task.status = SwarmTaskStatus::Verifying;
             } else {
                 task.status = SwarmTaskStatus::Completed;
+                if let Some(cp) = &self.checkpoint {
+                    let _ = cp.snapshot().await;
+                }
             }
             self.emit_ledger_update();
         }
@@ -275,12 +293,18 @@ impl SwarmOrchestrator {
     }
 
     fn emit_ledger_update(&self) {
-        tools::agent::emit_telemetry(serde_json::json!({
+        let payload = serde_json::json!({
             "type": "SwarmLedgerUpdate",
             "status": self.status,
             "objective": self.objective,
             "tasks": self.tasks,
             "agents": self.agents,
-        }));
+        });
+        
+        // Serialize state to disk for the /rewind feature
+        let _ = std::fs::create_dir_all(".kla/sessions");
+        let _ = std::fs::write(".kla/sessions/SWARM_STATE.json", serde_json::to_string_pretty(&payload).unwrap_or_default());
+
+        tools::agent::emit_telemetry(payload);
     }
 }

@@ -299,6 +299,14 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         category: SlashCommandCategory::Automation,
     },
     SlashCommandSpec {
+        name: "rewind",
+        aliases: &["revert"],
+        summary: "Time travel the swarm back to a specific task checkpoint",
+        argument_hint: Some("<task-index>"),
+        resume_supported: false,
+        category: SlashCommandCategory::Automation,
+    },
+    SlashCommandSpec {
         name: "review",
         aliases: &[],
         summary: "Open an interactive design document review session",
@@ -321,6 +329,9 @@ pub enum SlashCommand {
     },
     Map {
         path: Option<String>,
+    },
+    Rewind {
+        task_index: Option<usize>,
     },
     Review {
         path: Option<String>,
@@ -419,6 +430,9 @@ impl SlashCommand {
             },
             "map" => Self::Map {
                 path: remainder_after_command(trimmed, command),
+            },
+            "rewind" | "revert" => Self::Rewind {
+                task_index: parts.next().and_then(|s| s.parse().ok()),
             },
             "review" => Self::Review {
                 path: remainder_after_command(trimmed, command),

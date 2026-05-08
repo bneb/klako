@@ -412,6 +412,10 @@ impl LiveCli {
                 self.run_map(path.as_deref())?;
                 false
             }
+            SlashCommand::Rewind { task_index } => {
+                self.run_rewind(task_index)?;
+                false
+            }
             SlashCommand::Review { path } => {
                 self.run_review(path.as_deref())?;
                 false

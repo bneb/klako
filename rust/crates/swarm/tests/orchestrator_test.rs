@@ -19,7 +19,7 @@ async fn test_swarm_orchestrator_full_lifecycle() {
         budget: None,
     };
     
-    let mut orchestrator = SwarmOrchestrator::new(session, objective, Box::new(MockApiClient));
+    let mut orchestrator = SwarmOrchestrator::new(session, objective, Box::new(MockApiClient)).await;
     
     assert_eq!(orchestrator.status(), SwarmStatus::Idle);
     
@@ -47,7 +47,7 @@ async fn test_swarm_orchestrator_empirical_verification_lifecycle() {
         description: "Test verification".to_string(),
         budget: None,
     };
-    let mut orchestrator = SwarmOrchestrator::new(session, objective, Box::new(MockApiClient));
+    let mut orchestrator = SwarmOrchestrator::new(session, objective, Box::new(MockApiClient)).await;
     orchestrator.start().await.expect("Start failed");
     orchestrator.approve_plan().await.expect("Approve failed");
     
@@ -77,7 +77,7 @@ async fn test_swarm_orchestrator_verification_failure() {
         description: "Test failure".to_string(),
         budget: None,
     };
-    let mut orchestrator = SwarmOrchestrator::new(session, objective, Box::new(MockApiClient));
+    let mut orchestrator = SwarmOrchestrator::new(session, objective, Box::new(MockApiClient)).await;
     orchestrator.start().await.expect("Start failed");
     orchestrator.approve_plan().await.expect("Approve failed");
     
