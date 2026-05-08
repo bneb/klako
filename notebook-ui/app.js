@@ -211,10 +211,51 @@ class KlakoFlightDeck {
         const toggleSprint = document.getElementById('toggle-sprint');
         const toggleReview = document.getElementById('toggle-review');
         const toggleSwarm = document.getElementById('toggle-swarm');
+        const toggleSettings = document.getElementById('toggle-settings');
         const mechanicsPane = document.getElementById('mechanics-pane');
         const steerablePane = document.getElementById('steerable-pane');
         const sprintPane = document.getElementById('sprint-pane');
         const reviewPane = document.getElementById('review-pane');
+        const settingsModal = document.getElementById('settings-modal');
+        const settingsCloseBtn = document.getElementById('settings-close-btn');
+
+        if (toggleSettings && settingsModal) {
+            toggleSettings.addEventListener('click', () => {
+                settingsModal.classList.remove('hidden');
+            });
+        }
+        if (settingsCloseBtn && settingsModal) {
+            settingsCloseBtn.addEventListener('click', () => {
+                settingsModal.classList.add('hidden');
+            });
+        }
+        
+        // Handle Settings Form Changes
+        const modelSelect = document.getElementById('settings-model');
+        const permSelect = document.getElementById('settings-permissions');
+        const autoRetroCheck = document.getElementById('settings-auto-retro');
+        
+        if (modelSelect) {
+            modelSelect.addEventListener('change', (e) => {
+                if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                    this.ws.send(JSON.stringify({ type: "SubmitPrompt", text: `/model ${e.target.value}` }));
+                }
+            });
+        }
+        if (permSelect) {
+            permSelect.addEventListener('change', (e) => {
+                if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                    this.ws.send(JSON.stringify({ type: "SubmitPrompt", text: `/permissions ${e.target.value}` }));
+                }
+            });
+        }
+        if (autoRetroCheck) {
+            autoRetroCheck.addEventListener('change', (e) => {
+                if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                    this.ws.send(JSON.stringify({ type: "SubmitPrompt", text: `/config autoRetroEnabled ${e.target.checked}` }));
+                }
+            });
+        }
 
         const updateGridLayout = () => {
             let activeCount = 1; // Narrative pane always open
@@ -433,6 +474,10 @@ class KlakoFlightDeck {
                 this.activeTier.textContent = payload.tier;
                 if (payload.role === "idle") {
                     document.body.setAttribute('data-router-state', 'idle');
+                    const typingWrap = document.querySelector('.typing-indicator-wrap');
+                    if (typingWrap) {
+                        typingWrap.remove();
+                    }
                 } else {
                     document.body.setAttribute('data-router-state', 'active');
                 }

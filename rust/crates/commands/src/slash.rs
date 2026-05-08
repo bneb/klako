@@ -97,6 +97,14 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         category: SlashCommandCategory::Session,
     },
     SlashCommandSpec {
+        name: "settings",
+        aliases: &["setup"],
+        summary: "Open interactive settings menu to configure models, keys, and preferences",
+        argument_hint: None,
+        resume_supported: true,
+        category: SlashCommandCategory::Workspace,
+    },
+    SlashCommandSpec {
         name: "config",
         aliases: &[],
         summary: "Inspect Klako config files or merged sections",
@@ -349,6 +357,7 @@ pub enum SlashCommand {
         confirm: bool,
     },
     Cost,
+    Settings,
     Resume {
         session_path: Option<String>,
     },
@@ -459,6 +468,7 @@ impl SlashCommand {
                 confirm: parts.next() == Some("--confirm"),
             },
             "cost" => Self::Cost,
+            "settings" | "setup" => Self::Settings,
             "resume" => Self::Resume {
                 session_path: parts.next().map(ToOwned::to_owned),
             },

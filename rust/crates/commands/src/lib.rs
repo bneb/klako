@@ -111,6 +111,7 @@ pub fn handle_slash_command(
         | SlashCommand::Permissions { .. }
         | SlashCommand::Clear { .. }
         | SlashCommand::Cost
+        | SlashCommand::Settings
         | SlashCommand::Resume { .. }
         | SlashCommand::Config { .. }
         | SlashCommand::Memory
@@ -493,8 +494,9 @@ mod tests {
         assert!(help.contains("/retro"));
         assert!(help.contains("/design <feature>"));
         assert!(help.contains("/review <path>"));
-        assert_eq!(slash_command_specs().len(), 32);
-        assert_eq!(resume_supported_slash_commands().len(), 13);
+        assert!(help.contains("/settings"));
+        assert_eq!(slash_command_specs().len(), 33);
+        assert_eq!(resume_supported_slash_commands().len(), 14);
     }
 
     #[test]

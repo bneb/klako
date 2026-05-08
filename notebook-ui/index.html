@@ -24,6 +24,7 @@
                     <button id="toggle-steerable" class="icon-toggle" aria-label="Toggle Plan Editor">▤ Plan</button>
                     <button id="toggle-review" class="icon-toggle" aria-label="Toggle Review Pane">✎ Review</button>
                     <button id="toggle-mechanics" class="icon-toggle" aria-label="Toggle Telemetry">⚡ Tlm</button>
+                    <button id="toggle-settings" class="icon-toggle" aria-label="Settings">⚙ Settings</button>
                 </div>
             </header>
             <div id="chat-history"></div>
@@ -113,6 +114,40 @@
             <div class="modal-actions">
                 <button id="modal-deny-btn" class="danger-btn">Deny Execute</button>
                 <button id="modal-allow-btn" class="primary-btn">Allow Proceed</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="settings-modal" class="hidden">
+        <div class="modal-content">
+            <h3>Klako Settings</h3>
+            <div class="settings-form">
+                <label>
+                    Model:
+                    <select id="settings-model">
+                        <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+                        <option value="gemini-3.1-flash-lite-preview">Gemini 3.1 Flash Lite</option>
+                        <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro</option>
+                        <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
+                        <option value="claude-3-7-sonnet-20250219">Claude 3.7 Sonnet</option>
+                        <option value="grok-3">Grok 3</option>
+                    </select>
+                </label>
+                <label>
+                    Permissions:
+                    <select id="settings-permissions">
+                        <option value="read-only">Read Only</option>
+                        <option value="workspace-write">Workspace Write</option>
+                        <option value="danger-full-access">Danger: Full Access</option>
+                    </select>
+                </label>
+                <label>
+                    <input type="checkbox" id="settings-auto-retro">
+                    Auto-Retro Enabled
+                </label>
+            </div>
+            <div class="modal-actions">
+                <button id="settings-close-btn" class="primary-btn">Close</button>
             </div>
         </div>
     </div>

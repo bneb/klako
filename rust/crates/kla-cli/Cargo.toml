@@ -33,6 +33,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 regex = "1.12.3"
 dotenvy = "0.15.7"
 swarm = { version = "0.1.0", path = "../swarm" }
+dialoguer = "0.12.0"
 
 [features]
 default = []

@@ -330,6 +330,10 @@ impl LiveCli {
                 self.print_cost();
                 false
             }
+            SlashCommand::Settings => {
+                self.run_settings()?;
+                false
+            }
             SlashCommand::Resume { session_path } => self.resume_session(session_path)?,
             SlashCommand::Config { section } => {
                 Self::print_config(section.as_deref())?;
@@ -570,6 +574,53 @@ impl LiveCli {
     fn print_cost(&self) {
         let cumulative = self.runtime.usage().cumulative_usage();
         println!("{}", format_cost_report(cumulative));
+    }
+
+    fn run_settings(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        use dialoguer::{theme::ColorfulTheme, Select};
+        
+        let options = &[
+            "1. Change Model",
+            "2. Change Permission Mode",
+            "3. Exit",
+        ];
+        
+        let selection = Select::with_theme(&ColorfulTheme::default())
+            .with_prompt("Klako Settings")
+            .default(0)
+            .items(&options[..])
+            .interact()?;
+            
+        match selection {
+            0 => {
+                let models = &[
+                    "gemini-2.5-flash", 
+                    "gemini-3.1-flash-lite-preview", 
+                    "gemini-3.1-pro-preview", 
+                    "gemini-2.5-pro", 
+                    "grok-3",
+                    "claude-3-7-sonnet-20250219"
+                ];
+                let model_selection = Select::with_theme(&ColorfulTheme::default())
+                    .with_prompt("Select Model")
+                    .default(0)
+                    .items(&models[..])
+                    .interact()?;
+                self.set_model(Some(models[model_selection].to_string()))?;
+            }
+            1 => {
+                let modes = &["read-only", "workspace-write", "danger-full-access"];
+                let mode_selection = Select::with_theme(&ColorfulTheme::default())
+                    .with_prompt("Select Permission Mode")
+                    .default(0)
+                    .items(&modes[..])
+                    .interact()?;
+                self.set_permissions(Some(modes[mode_selection].to_string()))?;
+            }
+            _ => {}
+        }
+        
+        Ok(())
     }
 
     fn resume_session(
@@ -1172,17 +1223,27 @@ pub fn run_notebook_loop(
                 "type": "CanvasTelemetry",
                 "line": format!("[Notebook Execution Error] {}", e)
             }).to_string());
+            
+            // Send the error as a narrative delta so it shows up in the main chat view
+            let _ = tx.send(serde_json::json!({
+                "type": "NarrativeDelta",
+                "role": "thinker",
+                "tier": "System",
+                "text": format!("\n\n> **Execution Interrupted:** Cannot complete sequence. `{}`", e)
+            }).to_string());
+            
             let _ = tx.send(serde_json::json!({
                 "type": "StatusUpdate",
                 "role": "idle",
                 "tier": "Error // Idle"
             }).to_string());
+        } else {
+            let _ = tx.send(serde_json::json!({
+                "type": "StatusUpdate",
+                "role": "idle",
+                "tier": "Idle"
+            }).to_string());
         }
-        let _ = tx.send(serde_json::json!({
-            "type": "StatusUpdate",
-            "role": "idle",
-            "tier": "Idle"
-        }).to_string());
     }
     Ok(())
 }
