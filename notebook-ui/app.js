@@ -57,7 +57,7 @@ class MockStreamGenerator {
 class KlakoFlightDeck {
     constructor() {
         this.canvas = document.getElementById('telemetry-canvas');
-        this.ctx = this.canvas.getContext('2d', { alpha: false }); 
+        this.ctx = this.canvas.getContext('2d'); 
         this.history = document.getElementById('chat-history');
         this.indicator = document.getElementById('tier-indicator');
         this.activeTier = document.getElementById('active-tier');
@@ -69,10 +69,15 @@ class KlakoFlightDeck {
         this.currentTier = null;
         this.lastTelemetryStamp = performance.now();
         this.lastNarrativeDateStr = null;
+        this.renderQueuePending = false;
+        this.subagentCards = new Map();
+        this.subagentGrid = document.getElementById('subagent-grid');
         
         this.initTheme();
         this.initCanvas();
         this.bindEvents();
+        this.bindPaneToggles();
+        this.bindCopyUtilities();
         this.startGPULoop();
         
         const urlParams = new URLSearchParams(window.location.search);
@@ -83,6 +88,49 @@ class KlakoFlightDeck {
         } else {
             this.connectWebSocket();
         }
+    }
+
+    renderMockSprintBoard() {
+        const mockLedger = {
+            "sprint_id": "alpha-v1",
+            "tasks": [
+                { "id": "TASK-01", "title": "Implement Login API", "status": "IN_PROGRESS", "assignee": "Session-A" },
+                { "id": "TASK-02", "title": "Build React Login Component", "status": "OPEN", "assignee": null },
+                { "id": "TASK-03", "title": "Setup Postgres Schema", "status": "COMPLETED", "assignee": "Session-B" },
+                { "id": "TASK-04", "title": "Configure OAuth via Google", "status": "OPEN", "assignee": null }
+            ]
+        };
+        
+        const openCol = document.querySelector('#col-open .task-list');
+        const progCol = document.querySelector('#col-in-progress .task-list');
+        const doneCol = document.querySelector('#col-done .task-list');
+        
+        if (!openCol || !progCol || !doneCol) return;
+        
+        openCol.innerHTML = '';
+        progCol.innerHTML = '';
+        doneCol.innerHTML = '';
+        
+        mockLedger.tasks.forEach(task => {
+            const card = document.createElement('div');
+            card.className = 'task-card';
+            
+            let assigneeHtml = '';
+            if (task.assignee) {
+                const isActive = task.status === 'IN_PROGRESS' ? 'active' : '';
+                assigneeHtml = `<span class="task-assignee ${isActive}">${task.assignee}</span>`;
+            }
+            
+            card.innerHTML = `
+                <span class="task-id">${task.id}</span>
+                <span class="task-title">${task.title}</span>
+                ${assigneeHtml}
+            `;
+            
+            if (task.status === 'OPEN') openCol.appendChild(card);
+            else if (task.status === 'IN_PROGRESS') progCol.appendChild(card);
+            else if (task.status === 'COMPLETED') doneCol.appendChild(card);
+        });
     }
 
     connectWebSocket() {
@@ -107,14 +155,28 @@ class KlakoFlightDeck {
     }
 
     initTheme() {
-        const savedTheme = localStorage.getItem('klako-theme') || 'dark';
-        document.documentElement.setAttribute('data-theme', savedTheme);
+        const systemPrefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        const defaultTheme = systemPrefersDark ? 'dark' : 'light';
+        const savedTheme = localStorage.getItem('klako-theme');
+        const activeTheme = savedTheme || defaultTheme;
         
-        document.getElementById('theme-toggle').addEventListener('click', () => {
-            const current = document.documentElement.getAttribute('data-theme');
-            const next = current === 'dark' ? 'light' : 'dark';
-            document.documentElement.setAttribute('data-theme', next);
-            localStorage.setItem('klako-theme', next);
+        document.documentElement.setAttribute('data-theme', activeTheme);
+
+        const themeToggle = document.getElementById('theme-toggle');
+        if (themeToggle) {
+            themeToggle.addEventListener('click', () => {
+                const current = document.documentElement.getAttribute('data-theme');
+                const next = current === 'dark' ? 'light' : 'dark';
+                document.documentElement.setAttribute('data-theme', next);
+                localStorage.setItem('klako-theme', next);
+            });
+        }
+
+        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', event => {
+            if (!localStorage.getItem('klako-theme')) {
+                const newTheme = event.matches ? 'dark' : 'light';
+                document.documentElement.setAttribute('data-theme', newTheme);
+            }
         });
     }
 
@@ -127,7 +189,7 @@ class KlakoFlightDeck {
             const rect = this.canvasContainer.getBoundingClientRect();
             
             // Virtual Height = max(container height, total lines * lineHeight) + padding
-            const virtualHeight = Math.max(rect.height, this.telemetryBuffer.length * 20 + 48);
+            const virtualHeight = Math.max(rect.height, this.telemetryBuffer.length * 20 + 80);
             
             this.canvas.width = rect.width * dpr;
             this.canvas.height = virtualHeight * dpr;
@@ -139,6 +201,121 @@ class KlakoFlightDeck {
         window.addEventListener('resize', resizeHandle);
         this.resizeHandle = resizeHandle;
         resizeHandle();
+    }
+
+    bindPaneToggles() {
+        const chassis = document.getElementById('klako-chassis');
+        const toggleMechanics = document.getElementById('toggle-mechanics');
+        const toggleSteerable = document.getElementById('toggle-steerable');
+        const toggleSprint = document.getElementById('toggle-sprint');
+        const toggleSwarm = document.getElementById('toggle-swarm');
+        const mechanicsPane = document.getElementById('mechanics-pane');
+        const steerablePane = document.getElementById('steerable-pane');
+        const sprintPane = document.getElementById('sprint-pane');
+
+        const updateGridLayout = () => {
+            let activeCount = 1; // Narrative pane always open
+            if (mechanicsPane && mechanicsPane.classList.contains('visible')) activeCount++;
+            if (steerablePane && steerablePane.classList.contains('visible')) activeCount++;
+            if (sprintPane && sprintPane.classList.contains('visible')) activeCount++;
+            
+            if (activeCount >= 3) {
+                chassis.classList.add('grid-2x2');
+            } else {
+                chassis.classList.remove('grid-2x2');
+            }
+            
+            if (toggleSwarm) {
+                if (activeCount === 4) {
+                    toggleSwarm.classList.add('active');
+                } else {
+                    toggleSwarm.classList.remove('active');
+                }
+            }
+        };
+
+        const togglePane = (paneToShow, triggerBtn, forceState = null) => {
+            let isClosing = paneToShow.classList.contains('visible');
+            if (forceState !== null) {
+                isClosing = !forceState;
+            }
+            
+            if (isClosing) {
+                paneToShow.classList.remove('visible');
+                if (triggerBtn) triggerBtn.classList.remove('active');
+            } else {
+                paneToShow.classList.add('visible');
+                if (triggerBtn) triggerBtn.classList.add('active');
+            }
+            updateGridLayout();
+        };
+
+        if (toggleMechanics) toggleMechanics.addEventListener('click', () => togglePane(mechanicsPane, toggleMechanics));
+        if (toggleSteerable) toggleSteerable.addEventListener('click', () => togglePane(steerablePane, toggleSteerable));
+        if (toggleSprint) {
+            toggleSprint.addEventListener('click', () => {
+                togglePane(sprintPane, toggleSprint);
+                if (sprintPane.classList.contains('visible')) {
+                    this.renderMockSprintBoard();
+                }
+            });
+        }
+        
+        if (toggleSwarm) {
+            toggleSwarm.addEventListener('click', () => {
+                const isActive = toggleSwarm.classList.contains('active');
+                const nextState = !isActive;
+                togglePane(mechanicsPane, toggleMechanics, nextState);
+                togglePane(steerablePane, toggleSteerable, nextState);
+                togglePane(sprintPane, toggleSprint, nextState);
+                if (nextState) {
+                    this.renderMockSprintBoard();
+                }
+            });
+        }
+
+        const closeBtns = document.querySelectorAll('.close-pane-btn');
+        closeBtns.forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const targetId = e.currentTarget.getAttribute('data-target');
+                const pane = document.getElementById(targetId);
+                if (pane) pane.classList.remove('visible');
+                
+                if (targetId === 'mechanics-pane' && toggleMechanics) toggleMechanics.classList.remove('active');
+                if (targetId === 'steerable-pane' && toggleSteerable) toggleSteerable.classList.remove('active');
+                if (targetId === 'sprint-pane' && toggleSprint) toggleSprint.classList.remove('active');
+                updateGridLayout();
+            });
+        });
+    }
+
+    bindCopyUtilities() {
+        const copyBtn = document.getElementById('copy-plan-btn');
+        const steerableContent = document.getElementById('steerable-content');
+        
+        if (copyBtn && steerableContent) {
+            copyBtn.addEventListener('click', () => {
+                const rawText = steerableContent.innerText || '';
+                const lines = rawText.split('\n');
+                
+                let output = rawText;
+                if (lines.length > 250) {
+                    output = lines.slice(0, 250).join('\n') + '\n\n...[Truncated: Exceeded 250 lines]...';
+                }
+                
+                navigator.clipboard.writeText(output).then(() => {
+                    const originalText = copyBtn.innerText;
+                    copyBtn.innerText = 'Copied!';
+                    copyBtn.style.color = 'var(--status-typist)';
+                    setTimeout(() => {
+                        copyBtn.innerText = originalText;
+                        copyBtn.style.color = '';
+                    }, 2000);
+                }).catch(err => {
+                    console.error("Failed to copy", err);
+                });
+            });
+        }
     }
 
     bindEvents() {
@@ -206,6 +383,24 @@ class KlakoFlightDeck {
                     document.body.setAttribute('data-router-state', 'active');
                 }
                 break;
+            case "PlanDelta":
+                const steerablePane = document.getElementById('steerable-pane');
+                const steerableContent = document.getElementById('steerable-content');
+                if (steerableContent && steerablePane) {
+                    const safePlan = DOMPurify.sanitize(marked.parse(payload.payload));
+                    steerableContent.innerHTML += `<div class="plan-entry">${safePlan}</div>`;
+                    
+                    steerableContent.querySelectorAll('pre code').forEach((block) => {
+                        hljs.highlightElement(block);
+                    });
+
+                    // Force open the pane
+                    if (!steerablePane.classList.contains('visible')) {
+                        const toggleBtn = document.getElementById('toggle-steerable');
+                        if (toggleBtn) toggleBtn.click();
+                    }
+                }
+                break;
             case "NarrativeDelta":
                 const d = new Date();
                 const dateStr = d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
@@ -239,17 +434,49 @@ class KlakoFlightDeck {
                 }
                 this.currentNarrativeText += payload.text;
                 
-                // Securely render markdown
-                const rawHTML = marked.parse(this.currentNarrativeText);
-                const safeHTML = DOMPurify.sanitize(rawHTML);
-                this.currentNarrativeBubble.innerHTML = safeHTML;
-                
-                // Apply syntax highlighting
-                this.currentNarrativeBubble.querySelectorAll('pre code').forEach((block) => {
-                    hljs.highlightElement(block);
-                });
-                
-                this.scrollToBottom();
+                if (!this.renderQueuePending) {
+                    this.renderQueuePending = true;
+                    requestAnimationFrame(() => {
+                        this.renderQueuePending = false;
+                        if (!this.currentNarrativeBubble) return;
+
+                        // Securely render markdown but allow iframes for embedded webpages
+                        const rawHTML = marked.parse(this.currentNarrativeText);
+                        const safeHTML = DOMPurify.sanitize(rawHTML, {
+                            ADD_TAGS: ['iframe'],
+                            ADD_ATTR: ['allow', 'allowfullscreen', 'frameborder', 'scrolling', 'sandbox']
+                        });
+                        this.currentNarrativeBubble.innerHTML = safeHTML;
+                        
+                        // Apply syntax highlighting and render inline SVGs
+                        this.currentNarrativeBubble.querySelectorAll('pre code').forEach((block) => {
+                            hljs.highlightElement(block);
+                            
+                            const codeText = block.textContent.trim();
+                            const lowerCode = codeText.toLowerCase();
+                            const svgStart = lowerCode.indexOf('<svg');
+                            const svgEnd = lowerCode.lastIndexOf('</svg>');
+                            
+                            // Robustly check if the block contains an SVG definition
+                            if (svgStart !== -1 && svgEnd !== -1) {
+                                let preview = block.parentElement.nextElementSibling;
+                                if (!preview || !preview.classList.contains('svg-preview-container')) {
+                                    preview = document.createElement('div');
+                                    preview.className = 'svg-preview-container';
+                                    block.parentElement.insertAdjacentElement('afterend', preview);
+                                }
+                                
+                                // Extract only the SVG portion to prevent XML Prologues from breaking DOMPurify
+                                const rawSvg = codeText.substring(svgStart, svgEnd + 6);
+                                
+                                // Render the SVG securely
+                                preview.innerHTML = DOMPurify.sanitize(rawSvg, { USE_PROFILES: { svg: true, svgFilters: true } });
+                            }
+                        });
+                        
+                        this.scrollToBottom();
+                    });
+                }
                 break;
             case "CanvasTelemetry":
                 const now = performance.now();
@@ -298,7 +525,127 @@ class KlakoFlightDeck {
                 allowBtn.onclick = () => handleDecision("allow");
                 denyBtn.onclick = () => handleDecision("deny");
                 break;
+
+            // ── Sub-Agent Task Card Events ──────────────────────────
+            case "SubAgentStart":
+                this.createSubAgentCard(payload);
+                break;
+            case "SubAgentDelta":
+                this.appendSubAgentDelta(payload.agent_id, payload.text);
+                break;
+            case "SubAgentToolUse":
+                this.appendSubAgentToolUse(payload.agent_id, payload.tool_name, payload.input_summary);
+                break;
+            case "SubAgentComplete":
+                this.finalizeSubAgentCard(payload.agent_id, payload.status, payload.final_text_preview || payload.error);
+                break;
+            case "VisualArtifact":
+                this.renderVisualArtifact(payload.artifact);
+                break;
+            case "SwarmLedgerUpdate":
+                this.updateSprintBoard(payload);
+                break;
         }
+    }
+    
+    updateSprintBoard(ledger) {
+        const openCol = document.querySelector('#col-open .task-list');
+        const progCol = document.querySelector('#col-in-progress .task-list');
+        const doneCol = document.querySelector('#col-done .task-list');
+        
+        if (!openCol || !progCol || !doneCol) return;
+        
+        openCol.innerHTML = '';
+        progCol.innerHTML = '';
+        doneCol.innerHTML = '';
+        
+        const agentsMap = new Map();
+        if (ledger.agents) {
+            ledger.agents.forEach(agent => {
+                agentsMap.set(agent.id, agent);
+            });
+        }
+
+        if (ledger.tasks) {
+            ledger.tasks.forEach((task, index) => {
+                const card = document.createElement('div');
+                card.className = 'task-card';
+                
+                let statusClass = task.status.toLowerCase();
+                if (statusClass === 'pending') statusClass = 'open';
+                
+                card.innerHTML = `
+                    <span class="task-id">TASK-${String(index + 1).padStart(2, '0')}</span>
+                    <span class="task-title">${task.description}</span>
+                `;
+
+                // If task is running, show the agent id
+                if (task.status === 'Running') {
+                    card.classList.add('running');
+                    // Find the agent that corresponds to this task
+                    // For now, we assume agents match indices if we don't have a better link
+                    const agent = ledger.agents && ledger.agents[index];
+                    if (agent) {
+                        const active = agent.status === 'running' ? 'active' : '';
+                        card.innerHTML += `<span class="task-assignee ${active}">${agent.id}</span>`;
+                    }
+                    progCol.appendChild(card);
+                } else if (task.status === 'Completed') {
+                    doneCol.appendChild(card);
+                } else if (task.status === 'Pending') {
+                    openCol.appendChild(card);
+                } else {
+                    // Failed or unknown
+                    card.style.borderLeftColor = 'var(--status-thinker)'; // Red-ish
+                    doneCol.appendChild(card);
+                }
+            });
+        }
+    }
+
+    renderVisualArtifact(artifact) {
+        if (!artifact) return;
+        
+        const bubbleWrap = document.createElement('div');
+        bubbleWrap.className = "message-wrap agent visual-artifact-wrap";
+        
+        const label = document.createElement('div');
+        label.className = "persona-label";
+        label.textContent = `[ Visual System: ${artifact.type} ]`;
+        
+        const bubble = document.createElement('div');
+        bubble.className = "message agent visual-artifact-content";
+        
+        if (artifact.type === 'histogram') {
+            bubble.innerHTML = `<h4>${artifact.title}</h4><div class="histogram-container"></div>`;
+            const container = bubble.querySelector('.histogram-container');
+            // Simplified bar rendering for now
+            const max = Math.max(...artifact.data);
+            artifact.data.slice(0, 50).forEach(val => {
+                const bar = document.createElement('div');
+                bar.className = 'artifact-bar';
+                bar.style.height = `${(val / max) * 100}px`;
+                container.appendChild(bar);
+            });
+        } else if (artifact.type === 'table') {
+            let html = `<h4>${artifact.title}</h4><table class="artifact-table"><thead><tr>`;
+            artifact.headers.forEach(h => html += `<th>${h}</th>`);
+            html += `</tr></thead><tbody>`;
+            artifact.rows.forEach(row => {
+                html += `<tr>`;
+                row.forEach(cell => html += `<td>${cell}</td>`);
+                html += `</tr>`;
+            });
+            html += `</tbody></table>`;
+            bubble.innerHTML = html;
+        } else {
+            bubble.textContent = JSON.stringify(artifact, null, 2);
+        }
+        
+        bubbleWrap.appendChild(label);
+        bubbleWrap.appendChild(bubble);
+        this.history.appendChild(bubbleWrap);
+        this.scrollToBottom();
     }
     
     checkNarrativeDateShift(newDateStr) {
@@ -313,6 +660,104 @@ class KlakoFlightDeck {
         }
     }
     
+    // ── Sub-Agent Card Lifecycle ─────────────────────────────────
+
+    createSubAgentCard(payload) {
+        const { agent_id, name, description, model, subagent_type } = payload;
+
+        const card = document.createElement('div');
+        card.className = 'subagent-card running';
+        card.id = `sa-${agent_id}`;
+
+        const header = document.createElement('div');
+        header.className = 'subagent-card-header';
+
+        const dot = document.createElement('span');
+        dot.className = 'subagent-status-dot';
+
+        const nameEl = document.createElement('span');
+        nameEl.className = 'subagent-card-name';
+        nameEl.textContent = name || agent_id;
+
+        const badge = document.createElement('span');
+        badge.className = 'subagent-card-badge';
+        badge.textContent = model || subagent_type || 'agent';
+
+        header.appendChild(dot);
+        header.appendChild(nameEl);
+        header.appendChild(badge);
+
+        const desc = document.createElement('div');
+        desc.className = 'subagent-card-desc';
+        desc.textContent = description || '';
+
+        const output = document.createElement('div');
+        output.className = 'subagent-card-output';
+        output.textContent = 'Initializing…';
+
+        const footer = document.createElement('div');
+        footer.className = 'subagent-card-footer';
+        footer.innerHTML = `<span>${new Date().toLocaleTimeString('en-US', { hour12: false })}</span><span>running</span>`;
+
+        card.appendChild(header);
+        card.appendChild(desc);
+        card.appendChild(output);
+        card.appendChild(footer);
+
+        this.subagentGrid.appendChild(card);
+        this.subagentGrid.classList.add('has-cards');
+
+        this.subagentCards.set(agent_id, {
+            card,
+            output,
+            footer,
+            lines: [],
+            maxLines: 40
+        });
+    }
+
+    appendSubAgentDelta(agentId, text) {
+        const entry = this.subagentCards.get(agentId);
+        if (!entry) return;
+
+        entry.lines.push(text);
+        // Keep only the last N lines worth of text
+        if (entry.lines.length > entry.maxLines) {
+            entry.lines.shift();
+        }
+        entry.output.textContent = entry.lines.join('');
+        // Auto-scroll the output to bottom
+        entry.output.scrollTop = entry.output.scrollHeight;
+    }
+
+    appendSubAgentToolUse(agentId, toolName, inputSummary) {
+        const entry = this.subagentCards.get(agentId);
+        if (!entry) return;
+
+        const toolLine = document.createElement('div');
+        toolLine.className = 'subagent-tool-line';
+        toolLine.textContent = `🛠️ ${toolName} · ${inputSummary || ''}`;
+
+        // Insert before the footer
+        entry.card.insertBefore(toolLine, entry.footer);
+    }
+
+    finalizeSubAgentCard(agentId, status, preview) {
+        const entry = this.subagentCards.get(agentId);
+        if (!entry) return;
+
+        entry.card.classList.remove('running');
+        entry.card.classList.add(status === 'completed' ? 'completed' : 'failed');
+
+        if (preview) {
+            entry.output.textContent = preview;
+        }
+
+        const badgeClass = status === 'completed' ? 'ok' : 'err';
+        const badgeText = status === 'completed' ? '✓ done' : '✗ failed';
+        entry.footer.innerHTML = `<span>${new Date().toLocaleTimeString('en-US', { hour12: false })}</span><span class="subagent-result-badge ${badgeClass}">${badgeText}</span>`;
+    }
+
     scrollToBottom() {
         this.history.scrollTop = this.history.scrollHeight;
     }
@@ -321,26 +766,29 @@ class KlakoFlightDeck {
         const render = () => {
             const isLight = document.documentElement.getAttribute('data-theme') === 'light';
             
-            this.ctx.fillStyle = isLight ? '#F9FAFB' : '#0A0A0B';
-            this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+            // Clear the canvas to be fully transparent, allowing the CSS glass background to show through
+            this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
             
             this.ctx.fillStyle = isLight ? '#0A0A0B' : '#FFFFFF';
             this.ctx.font = '13px "Fira Code", monospace';
             
             const lineHeight = 20;
-            const padding = 24;
+            const paddingY = 60; // Increased to ensure the first line cleanly drops below the 30px tall sticky date header
             
             const scrollTop = this.canvasContainer.scrollTop;
             const viewportHeight = this.canvasContainer.clientHeight;
-            const startIdx = Math.max(0, Math.floor((scrollTop - padding) / lineHeight));
-            const endIdx = Math.min(this.telemetryBuffer.length, Math.ceil((scrollTop + viewportHeight - padding) / lineHeight));
+            const startIdx = Math.max(0, Math.floor((scrollTop - paddingY) / lineHeight));
+            const endIdx = Math.min(this.telemetryBuffer.length, Math.ceil((scrollTop + viewportHeight - paddingY) / lineHeight));
             
             const visibleBuffer = this.telemetryBuffer.slice(startIdx, endIdx);
             
-            let y = padding + (startIdx * lineHeight);
+            let y = paddingY + (startIdx * lineHeight);
+            
+            // Text padding horizontally (left)
+            const paddingX = 24;
             
             for (let i = 0; i < visibleBuffer.length; i++) {
-                this.ctx.fillText(visibleBuffer[i].parsedLine, padding, y);
+                this.ctx.fillText(visibleBuffer[i].parsedLine, paddingX, y);
                 y += lineHeight;
             }
             

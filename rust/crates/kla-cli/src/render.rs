@@ -50,7 +50,7 @@ pub struct Spinner {
 }
 
 impl Spinner {
-    const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    const FRAMES: [&str; 8] = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
 
     #[must_use]
     pub fn new() -> Self {
@@ -71,7 +71,7 @@ impl Spinner {
             MoveToColumn(0),
             Clear(ClearType::CurrentLine),
             SetForegroundColor(theme.spinner_active),
-            Print(format!("{frame} {label}")),
+            Print(format!(" {frame} {label}")),
             ResetColor,
             RestorePosition
         )?;
@@ -90,7 +90,7 @@ impl Spinner {
             MoveToColumn(0),
             Clear(ClearType::CurrentLine),
             SetForegroundColor(theme.spinner_done),
-            Print(format!("✔ {label}\n")),
+            Print(format!(" ✔ {label}\n")),
             ResetColor
         )?;
         out.flush()
@@ -108,7 +108,7 @@ impl Spinner {
             MoveToColumn(0),
             Clear(ClearType::CurrentLine),
             SetForegroundColor(theme.spinner_failed),
-            Print(format!("✘ {label}\n")),
+            Print(format!(" ✘ {label}\n")),
             ResetColor
         )?;
         out.flush()
@@ -272,13 +272,13 @@ impl TerminalRenderer {
     #[must_use]
     pub fn markdown_to_ansi(&self, markdown: &str) -> String {
         let raw = self.render_markdown(markdown);
-        // Add left frame border to every output line (Claude Code aesthetic)
+        // Add left frame border with premium horizontal breathing room
         raw.lines()
             .map(|line| {
                 if line.is_empty() {
-                    "\x1b[38;5;238m│\x1b[0m ".to_string()
+                    " \x1b[38;5;238m│\x1b[0m".to_string()
                 } else {
-                    format!("\x1b[38;5;238m│\x1b[0m  {}", line)
+                    format!(" \x1b[38;5;238m│\x1b[0m   {}", line)
                 }
             })
             .collect::<Vec<_>>()
