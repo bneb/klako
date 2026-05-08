@@ -291,6 +291,14 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         category: SlashCommandCategory::Automation,
     },
     SlashCommandSpec {
+        name: "map",
+        aliases: &[],
+        summary: "Generate an interactive codebase architecture map",
+        argument_hint: Some("[path]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Automation,
+    },
+    SlashCommandSpec {
         name: "review",
         aliases: &[],
         summary: "Open an interactive design document review session",
@@ -310,6 +318,9 @@ pub enum SlashCommand {
     Retro,
     Design {
         feature: Option<String>,
+    },
+    Map {
+        path: Option<String>,
     },
     Review {
         path: Option<String>,
@@ -405,6 +416,9 @@ impl SlashCommand {
             "retro" => Self::Retro,
             "design" => Self::Design {
                 feature: remainder_after_command(trimmed, command),
+            },
+            "map" => Self::Map {
+                path: remainder_after_command(trimmed, command),
             },
             "review" => Self::Review {
                 path: remainder_after_command(trimmed, command),

@@ -408,6 +408,10 @@ impl LiveCli {
                 self.run_design(feature.as_deref())?;
                 false
             }
+            SlashCommand::Map { path } => {
+                self.run_map(path.as_deref())?;
+                false
+            }
             SlashCommand::Review { path } => {
                 self.run_review(path.as_deref())?;
                 false

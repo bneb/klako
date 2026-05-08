@@ -23,11 +23,15 @@ interface KlakoState {
   reviewFilePath: string | null;
   reviewContent: string | null;
   reviewVisible: boolean;
+  
+  mapData: any | null;
+  mapVisible: boolean;
 
   handleStatusUpdate: (payload: any) => void;
   handleNarrativeDelta: (payload: any) => void;
   handleSwarmLedgerUpdate: (payload: any) => void;
   handleCanvasTelemetry: (payload: any) => void;
+  handleMapArtifact: (payload: any) => void;
 }
 
 export const useStore = create<KlakoState>((set) => ({
@@ -41,6 +45,9 @@ export const useStore = create<KlakoState>((set) => ({
   reviewFilePath: null,
   reviewContent: null,
   reviewVisible: false,
+  
+  mapData: null,
+  mapVisible: false,
 
   handleStatusUpdate: (payload) => {
     set({ status: payload.role, tier: payload.tier });
@@ -66,5 +73,9 @@ export const useStore = create<KlakoState>((set) => ({
       }
       return { telemetry: newTelemetry };
     });
+  },
+  
+  handleMapArtifact: (payload) => {
+      set({ mapData: payload.map_data, mapVisible: true });
   }
 }));

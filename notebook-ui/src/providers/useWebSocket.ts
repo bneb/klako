@@ -53,6 +53,9 @@ export const useWebSocket = () => {
             case 'OpenReviewPane':
               useStore.setState({ reviewFilePath: payload.file_path, reviewContent: payload.content, reviewVisible: true });
               break;
+            case 'MapArtifact':
+              useStore.getState().handleMapArtifact(payload);
+              break;
             default:
               // Handle other events like PlanDelta, VisualArtifact later
               break;

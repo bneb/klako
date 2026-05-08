@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { SprintBoard } from './components/panes/SprintBoard';
 import { ReviewPane } from './components/panes/ReviewPane';
+import { MapPane } from './components/panes/MapPane';
 import { useWebSocket } from './providers/useWebSocket';
 import { useStore } from './store/useStore';
 
@@ -48,6 +49,7 @@ function App() {
         {/* Panes Area */}
         <main className="flex-1 flex overflow-hidden p-4 gap-4">
           <SprintBoard />
+          <MapPane />
           <ReviewPane />
         </main>
       </div>
