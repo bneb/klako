@@ -394,8 +394,8 @@ impl LiveCli {
                 self.run_loop(objective.as_deref(), budget)?;
                 false
             }
-            SlashCommand::Dream => {
-                self.run_dream()?;
+            SlashCommand::Retro => {
+                self.run_retro()?;
                 false
             }
             SlashCommand::Unknown(name) => {
@@ -849,12 +849,12 @@ impl LiveCli {
         Ok(())
     }
 
-    fn run_dream(&self) -> Result<(), Box<dyn std::error::Error>> {
-        println!("Initiating retrospective dreaming sequence...");
+    fn run_retro(&self) -> Result<(), Box<dyn std::error::Error>> {
+        println!("Initiating autonomous retrospective sequence...");
         
         let objective = "Review recent session logs and history to identify patterns of failure, successful workflows, and areas for improvement. Propose updates to KLA.md axioms or new SKILL.md profiles.";
         
-        // Build an ApiClient for the dreamer
+        // Build an ApiClient for the retrospective agent
         let (_, tool_registry) = runtime_bridge::build_runtime_plugin_state()?;
         let client = runtime_bridge::DefaultRuntimeClient::new(
             self.model.clone(),
@@ -869,6 +869,7 @@ impl LiveCli {
         
         let swarm_objective = swarm::SwarmObjective {
             description: objective.to_string(),
+            budget: None,
         };
         let mut orchestrator = swarm::SwarmOrchestrator::new(
             self.runtime.session().clone(),
@@ -877,20 +878,22 @@ impl LiveCli {
         );
         
         tokio::runtime::Runtime::new()?.block_on(async {
-            orchestrator.start().await.expect("Failed to start Dreamer Swarm");
+            orchestrator.start().await.expect("Failed to start Retrospective Swarm");
             
-            // For Dreaming, we might want to automatically assign a 'Dreamer' subagent type
-            // or let the Architect decide. The current start() lets the Architect decide.
+            // Skip the manual approval phase for autonomous retros
+            if orchestrator.status() == swarm::SwarmStatus::Planning {
+                orchestrator.approve_plan().await.expect("Failed to auto-approve retro plan");
+            }
             
             while orchestrator.status() == swarm::SwarmStatus::Running {
-                orchestrator.tick().await.expect("Dream tick failed");
+                orchestrator.tick().await.expect("Retro tick failed");
                 
-                // Simulate dreamer progress for now
+                // Simulate retro progress for now
                 let agents = orchestrator.agents().to_vec();
                 if !agents.is_empty() {
                     for (i, agent) in agents.iter().enumerate() {
                         if agent.status == "running" {
-                             orchestrator.complete_task(i, "Identified pattern: missing error handling in bash tool".to_string()).await.expect("Failed to complete dream task");
+                             orchestrator.complete_task(i, "Identified pattern: missing error handling in bash tool".to_string()).await.expect("Failed to complete retro task");
                         }
                     }
                 }
@@ -899,7 +902,7 @@ impl LiveCli {
             }
         });
         
-        println!("Dreaming sequence complete. Proposals generated in .kla/sessions/DREAM_REPORT.md");
+        println!("Retrospective sequence complete. Proposals generated in .kla/sessions/RETRO_REPORT.md");
         Ok(())
     }
 

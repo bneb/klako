@@ -143,10 +143,10 @@ fn supported_config_setting(setting: &str) -> Option<ConfigSettingSpec> {
             path: &["autoMemoryEnabled"],
             options: None,
         },
-        "autoDreamEnabled" => ConfigSettingSpec {
+        "autoRetroEnabled" => ConfigSettingSpec {
             scope: ConfigScope::Settings,
             kind: ConfigKind::Boolean,
-            path: &["autoDreamEnabled"],
+            path: &["autoRetroEnabled"],
             options: None,
         },
         "fileCheckpointingEnabled" => ConfigSettingSpec {

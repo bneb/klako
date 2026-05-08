@@ -267,7 +267,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         category: SlashCommandCategory::Automation,
     },
     SlashCommandSpec {
-        name: "dream",
+        name: "retro",
         aliases: &[],
         summary: "Initiate an autonomous retrospective to identify patterns and propose improvements",
         argument_hint: None,
@@ -278,12 +278,12 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
 
 // ── Slash command enum ───────────────────────────────────────────────
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum SlashCommand {
     Help,
     Status,
     Compact,
-    Dream,
+    Retro,
     Loop {
         objective: Option<String>,
         budget: Option<f64>,
@@ -371,7 +371,7 @@ impl SlashCommand {
             "help" => Self::Help,
             "status" => Self::Status,
             "compact" => Self::Compact,
-            "dream" => Self::Dream,
+            "retro" => Self::Retro,
             "loop" | "swarm" => {
                 let remainder = remainder_after_command(trimmed, command);
                 let mut objective = remainder.clone();

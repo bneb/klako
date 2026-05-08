@@ -82,7 +82,7 @@ pub fn handle_slash_command(
                 session: result.compacted_session,
             })
         }
-        SlashCommand::Loop { objective } => {
+        SlashCommand::Loop { objective, budget: _ } => {
             let objective = objective.unwrap_or_else(|| "Solve the problem".to_string());
             Some(SlashCommandResult {
                 message: format!("Looping autonomously to solve: {}", objective),
@@ -94,7 +94,7 @@ pub fn handle_slash_command(
             session: session.clone(),
         }),
         SlashCommand::Status
-        | SlashCommand::Dream
+        | SlashCommand::Retro
         | SlashCommand::Branch { .. }
         | SlashCommand::Bughunter { .. }
         | SlashCommand::Worktree { .. }
@@ -488,7 +488,7 @@ mod tests {
         assert!(help.contains("/skills"));
         assert!(help.contains("/loop <objective>"));
         assert!(help.contains("aliases: /swarm"));
-        assert!(help.contains("/dream"));
+        assert!(help.contains("/retro"));
         assert_eq!(slash_command_specs().len(), 30);
         assert_eq!(resume_supported_slash_commands().len(), 13);
     }
