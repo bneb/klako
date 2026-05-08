@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::OnceLock;
 
 use api::{
     max_tokens_for_model, resolve_model_alias, ContentBlockDelta, InputContentBlock, InputMessage,
@@ -12,8 +13,25 @@ use runtime::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use tokio::sync::broadcast;
 
 use crate::{execute_tool, mvp_tool_specs, ToolSpec};
+
+// ── Telemetry sink ───────────────────────────────────────────────────
+
+static TELEMETRY_SINK: OnceLock<broadcast::Sender<String>> = OnceLock::new();
+
+/// Register a broadcast channel so sub-agent jobs can emit telemetry
+/// events to the notebook WebSocket. Call once at startup.
+pub fn set_telemetry_sink(tx: broadcast::Sender<String>) {
+    let _ = TELEMETRY_SINK.set(tx);
+}
+
+pub fn emit_telemetry(event: serde_json::Value) {
+    if let Some(tx) = TELEMETRY_SINK.get() {
+        let _ = tx.send(event.to_string());
+    }
+}
 
 // ── Constants ────────────────────────────────────────────────────────
 
@@ -30,6 +48,7 @@ pub(crate) struct AgentInput {
     pub subagent_type: Option<String>,
     pub name: Option<String>,
     pub model: Option<String>,
+    pub allowed_tools: Option<Vec<String>>,
 }
 
 // ── Output types ─────────────────────────────────────────────────────
@@ -101,7 +120,10 @@ where
         .unwrap_or_else(|| slugify_agent_name(&input.description));
     let created_at = iso8601_now();
     let system_prompt = build_agent_system_prompt(&normalized_subagent_type)?;
-    let allowed_tools = allowed_tools_for_subagent(&normalized_subagent_type);
+    let mut allowed_tools = allowed_tools_for_subagent(&normalized_subagent_type);
+    if let Some(explicit_tools) = input.allowed_tools {
+        allowed_tools.extend(explicit_tools);
+    }
 
     let output_contents = format!(
         "# Agent Task\n\n- id: {}\n- name: {}\n- description: {}\n- subagent_type: {}\n- created_at: {}\n\n## Prompt\n\n{}\n",
@@ -171,25 +193,58 @@ fn spawn_agent_job(job: AgentJob) -> Result<(), String> {
 }
 
 fn run_agent_job(job: &AgentJob) -> Result<(), String> {
+    // Emit SubAgentStart telemetry
+    emit_telemetry(json!({
+        "type": "SubAgentStart",
+        "agent_id": job.manifest.agent_id,
+        "name": job.manifest.name,
+        "description": job.manifest.description,
+        "model": job.manifest.model,
+        "subagent_type": job.manifest.subagent_type
+    }));
+
     let mut runtime = build_agent_runtime(job)?.with_max_iterations(DEFAULT_AGENT_MAX_ITERATIONS);
     let summary = runtime
         .run_turn(job.prompt.clone(), None)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| {
+            emit_telemetry(json!({
+                "type": "SubAgentComplete",
+                "agent_id": job.manifest.agent_id,
+                "status": "failed",
+                "error": error.to_string()
+            }));
+            error.to_string()
+        })?;
+
     let final_text = final_assistant_text(&summary);
+    let preview = if final_text.len() > 200 {
+        format!("{}…", &final_text[..200])
+    } else {
+        final_text.clone()
+    };
+
+    emit_telemetry(json!({
+        "type": "SubAgentComplete",
+        "agent_id": job.manifest.agent_id,
+        "status": "completed",
+        "final_text_preview": preview
+    }));
+
     persist_agent_terminal_state(&job.manifest, "completed", Some(final_text.as_str()), None)
 }
 
 fn build_agent_runtime(
     job: &AgentJob,
 ) -> Result<ConversationRuntime<ProviderRuntimeClient, SubagentToolExecutor>, String> {
+    let agent_id = job.manifest.agent_id.clone();
     let model = job
         .manifest
         .model
         .clone()
         .unwrap_or_else(|| DEFAULT_AGENT_MODEL.to_string());
     let allowed_tools = job.allowed_tools.clone();
-    let api_client = ProviderRuntimeClient::new(model, allowed_tools.clone())?;
-    let tool_executor = SubagentToolExecutor::new(allowed_tools);
+    let api_client = ProviderRuntimeClient::new(agent_id.clone(), model, allowed_tools.clone())?;
+    let tool_executor = SubagentToolExecutor::new(agent_id, allowed_tools);
     Ok(ConversationRuntime::new(
         Session::new(),
         api_client,
@@ -203,11 +258,21 @@ fn build_agent_runtime(
 
 fn build_agent_system_prompt(subagent_type: &str) -> Result<Vec<String>, String> {
     let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+    let mut loaded_skills = Vec::new();
+    if let Ok(config) = runtime::ConfigLoader::default_for(&cwd).load() {
+        if let Some(topology) = config.agency_topology() {
+            if let Some(provider) = topology.providers.get(subagent_type) {
+                loaded_skills = provider.skills.clone();
+            }
+        }
+    }
+
     let mut prompt = load_system_prompt(
         cwd,
         DEFAULT_AGENT_SYSTEM_DATE.to_string(),
         std::env::consts::OS,
         "unknown",
+        &loaded_skills,
     )
     .map_err(|error| error.to_string())?;
     prompt.push(format!(
@@ -230,6 +295,9 @@ pub(crate) fn allowed_tools_for_subagent(subagent_type: &str) -> BTreeSet<String
             "read_file",
             "glob_search",
             "grep_search",
+            "DiscoveryWorld",
+            "SymbolWorld",
+            "LiveWorld",
             "WebFetch",
             "WebSearch",
             "ToolSearch",
@@ -260,6 +328,7 @@ pub(crate) fn allowed_tools_for_subagent(subagent_type: &str) -> BTreeSet<String
             "StructuredOutput",
             "SendUserMessage",
             "PowerShell",
+            "ParityWorld",
         ],
         "claw-guide" => vec![
             "read_file",
@@ -280,6 +349,20 @@ pub(crate) fn allowed_tools_for_subagent(subagent_type: &str) -> BTreeSet<String
             "glob_search",
             "grep_search",
             "ToolSearch",
+        ],
+        "Logistics" => vec![
+            "read_file",
+            "glob_search",
+            "grep_search",
+            "WebFetch",
+            "WebSearch",
+            "ToolSearch",
+            "Skill",
+            "StructuredOutput",
+            "SendUserMessage",
+            "LogisticsWorld",
+            "TemporalWorld",
+            "LiveWorld",
         ],
         _ => vec![
             "bash",
@@ -463,10 +546,11 @@ pub(crate) struct ProviderRuntimeClient {
     client: ProviderClient,
     model: String,
     allowed_tools: BTreeSet<String>,
+    agent_id: String,
 }
 
 impl ProviderRuntimeClient {
-    pub fn new(model: String, allowed_tools: BTreeSet<String>) -> Result<Self, String> {
+    pub fn new(agent_id: String, model: String, allowed_tools: BTreeSet<String>) -> Result<Self, String> {
         let model = resolve_model_alias(&model).to_string();
         let client = ProviderClient::from_model(&model).map_err(|error| error.to_string())?;
         Ok(Self {
@@ -474,6 +558,7 @@ impl ProviderRuntimeClient {
             client,
             model,
             allowed_tools,
+            agent_id,
         })
     }
 }
@@ -495,6 +580,7 @@ impl ApiClient for ProviderRuntimeClient {
             system: (!request.system_prompt.is_empty()).then(|| request.system_prompt.join("\n\n")),
             tools: (!tools.is_empty()).then_some(tools),
             tool_choice: (!self.allowed_tools.is_empty()).then_some(ToolChoice::Auto),
+            force_json_schema: None,
             stream: true,
         };
 
@@ -531,6 +617,11 @@ impl ApiClient for ProviderRuntimeClient {
                     ApiStreamEvent::ContentBlockDelta(delta) => match delta.delta {
                         ContentBlockDelta::TextDelta { text } => {
                             if !text.is_empty() {
+                                emit_telemetry(json!({
+                                    "type": "SubAgentDelta",
+                                    "agent_id": self.agent_id,
+                                    "text": text
+                                }));
                                 events.push(AssistantEvent::TextDelta(text));
                             }
                         }
@@ -595,11 +686,12 @@ impl ApiClient for ProviderRuntimeClient {
 
 pub(crate) struct SubagentToolExecutor {
     allowed_tools: BTreeSet<String>,
+    agent_id: String,
 }
 
 impl SubagentToolExecutor {
-    pub fn new(allowed_tools: BTreeSet<String>) -> Self {
-        Self { allowed_tools }
+    pub fn new(agent_id: String, allowed_tools: BTreeSet<String>) -> Self {
+        Self { allowed_tools, agent_id }
     }
 }
 
@@ -610,6 +702,17 @@ impl ToolExecutor for SubagentToolExecutor {
                 "tool `{tool_name}` is not enabled for this sub-agent"
             )));
         }
+        let input_summary = if input.len() > 120 {
+            format!("{}…", &input[..120])
+        } else {
+            input.to_string()
+        };
+        emit_telemetry(json!({
+            "type": "SubAgentToolUse",
+            "agent_id": self.agent_id,
+            "tool_name": tool_name,
+            "input_summary": input_summary
+        }));
         let value = serde_json::from_str(input)
             .map_err(|error| ToolError::new(format!("invalid tool input JSON: {error}")))?;
         execute_tool(tool_name, &value).map_err(ToolError::new)

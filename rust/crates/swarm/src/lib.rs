@@ -18,6 +18,7 @@ pub struct SwarmObjective {
 pub enum SwarmTaskStatus {
     Pending,
     Running,
+    Verifying,
     Completed,
     Failed(String),
 }
@@ -26,6 +27,8 @@ pub enum SwarmTaskStatus {
 pub struct SwarmTask {
     pub description: String,
     pub status: SwarmTaskStatus,
+    pub verification_tool: Option<String>,
+    pub verification_input: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,6 +36,7 @@ pub struct SwarmAgent {
     pub id: String,
     pub subagent_type: String,
     pub status: String,
+    pub task_index: Option<usize>,
 }
 
 pub struct SwarmOrchestrator {
@@ -64,12 +68,17 @@ impl SwarmOrchestrator {
         &self.tasks
     }
 
+    pub fn tasks_mut(&mut self) -> &mut [SwarmTask] {
+        &mut self.tasks
+    }
+
     pub fn agents(&self) -> &[SwarmAgent] {
         &self.agents
     }
 
     pub async fn start(&mut self) -> Result<(), String> {
         self.status = SwarmStatus::Running;
+        self.emit_ledger_update();
         
         let planning_prompt = format!(
             "You are a Tier-1 Architect agent. Decompose the following objective into a set of atomic, verifiable engineering tasks: {}\n\nReturn the tasks as a JSON list of objects with a 'description' field. Use only JSON, no other text.",
@@ -105,6 +114,8 @@ impl SwarmOrchestrator {
                             self.tasks.push(SwarmTask {
                                 description: desc.to_string(),
                                 status: SwarmTaskStatus::Pending,
+                                verification_tool: None,
+                                verification_input: None,
                             });
                         }
                     }
@@ -116,25 +127,59 @@ impl SwarmOrchestrator {
             self.tasks.push(SwarmTask {
                 description: format!("Analyze: {}", self.objective.description),
                 status: SwarmTaskStatus::Pending,
+                verification_tool: None,
+                verification_input: None,
             });
         }
         
+        self.emit_ledger_update();
         Ok(())
     }
 
     pub async fn tick(&mut self) -> Result<(), String> {
         if self.tasks.iter().all(|t| t.status == SwarmTaskStatus::Completed) && !self.tasks.is_empty() {
             self.status = SwarmStatus::Completed;
+            self.emit_ledger_update();
             return Ok(());
         }
 
-        if let Some(task) = self.tasks.iter_mut().find(|t| t.status == SwarmTaskStatus::Pending) {
+        // 1. Check for tasks in Verifying state to run deterministic tools
+        let mut verifications = Vec::new();
+        for (index, task) in self.tasks.iter().enumerate() {
+            if task.status == SwarmTaskStatus::Verifying {
+                if let Some(tool_name) = &task.verification_tool {
+                    let fallback = serde_json::json!({});
+                    let input = task.verification_input.as_ref().unwrap_or(&fallback);
+                    match tools::execute_tool(tool_name, input) {
+                        Ok(_) => {
+                            verifications.push((index, SwarmTaskStatus::Completed));
+                        }
+                        Err(err) => {
+                            verifications.push((index, SwarmTaskStatus::Failed(format!("Verification failed: {}", err))));
+                        }
+                    }
+                } else {
+                    verifications.push((index, SwarmTaskStatus::Completed));
+                }
+            }
+        }
+
+        for (index, new_status) in verifications {
+            if let Some(task) = self.tasks.get_mut(index) {
+                task.status = new_status;
+            }
+        }
+
+        // 2. Check for Pending tasks to spawn agents
+        if let Some((index, task)) = self.tasks.iter_mut().enumerate().find(|(_, t)| t.status == SwarmTaskStatus::Pending) {
             task.status = SwarmTaskStatus::Running;
+            let description = task.description.clone();
+            self.emit_ledger_update();
             
             let input = serde_json::json!({
                 "subagent_type": "Engineer",
-                "description": format!("Task: {}", task.description),
-                "prompt": format!("Please complete this task: {}", task.description)
+                "description": format!("Task: {}", description),
+                "prompt": format!("Please complete this task: {}", description)
             });
             
             let result_str = tools::execute_tool("Delegate", &input)?;
@@ -145,14 +190,26 @@ impl SwarmOrchestrator {
                 id: agent_id.to_string(),
                 subagent_type: "Engineer".to_string(),
                 status: "running".to_string(),
+                task_index: Some(index),
             });
+            self.emit_ledger_update();
         }
+
+        if !self.tasks.is_empty() && self.status == SwarmStatus::Running {
+            self.emit_ledger_update();
+        }
+
         Ok(())
     }
 
     pub async fn complete_task(&mut self, task_index: usize, _result: String) -> Result<(), String> {
         if let Some(task) = self.tasks.get_mut(task_index) {
-            task.status = SwarmTaskStatus::Completed;
+            if task.verification_tool.is_some() {
+                task.status = SwarmTaskStatus::Verifying;
+            } else {
+                task.status = SwarmTaskStatus::Completed;
+            }
+            self.emit_ledger_update();
         }
         Ok(())
     }
@@ -160,7 +217,18 @@ impl SwarmOrchestrator {
     pub async fn fail_task(&mut self, task_index: usize, error: String) -> Result<(), String> {
         if let Some(task) = self.tasks.get_mut(task_index) {
             task.status = SwarmTaskStatus::Failed(error);
+            self.emit_ledger_update();
         }
         Ok(())
+    }
+
+    fn emit_ledger_update(&self) {
+        tools::agent::emit_telemetry(serde_json::json!({
+            "type": "SwarmLedgerUpdate",
+            "status": self.status,
+            "objective": self.objective,
+            "tasks": self.tasks,
+            "agents": self.agents,
+        }));
     }
 }

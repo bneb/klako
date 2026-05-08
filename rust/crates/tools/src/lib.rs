@@ -1,8 +1,12 @@
-mod agent;
+pub mod agent;
 mod config;
 mod misc;
 mod notebook;
 mod web;
+mod worlds;
+mod render;
+
+pub use agent::set_telemetry_sink;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -12,8 +16,9 @@ use runtime::{
     edit_file, execute_bash, glob_search, grep_search, read_file, write_file, BashCommandInput,
     GrepSearchInput, PermissionMode,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use schemars::{schema_for, JsonSchema};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolManifestEntry {
@@ -216,6 +221,15 @@ fn permission_mode_from_plugin(value: &str) -> PermissionMode {
     }
 }
 
+fn schema_for_type<T: JsonSchema>() -> Value {
+    let mut schema = serde_json::to_value(schema_for!(T)).unwrap();
+    if let Some(obj) = schema.as_object_mut() {
+        obj.remove("$schema");
+        obj.remove("title");
+    }
+    schema
+}
+
 #[must_use]
 #[allow(clippy::too_many_lines)]
 pub fn mvp_tool_specs() -> Vec<ToolSpec> {
@@ -410,7 +424,11 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
                     "prompt": { "type": "string" },
                     "subagent_type": { "type": "string" },
                     "name": { "type": "string" },
-                    "model": { "type": "string" }
+                    "model": { "type": "string" },
+                    "allowed_tools": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    }
                 },
                 "required": ["description", "prompt"],
                 "additionalProperties": false
@@ -538,7 +556,199 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
             }),
             required_permission: PermissionMode::DangerFullAccess,
         },
+        ToolSpec {
+            name: "TemporalWorld",
+            description: "High-performance temporal engine for time math, holiday lookup, and planning.",
+            input_schema: schema_for_type::<worlds::TemporalWorldInput>(),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "PhysicsWorld",
+            description: "Deterministic physics engine for unit conversions and kinematic simulations.",
+            input_schema: schema_for_type::<worlds::PhysicsWorldInput>(),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "WasmWorld",
+            description: "Executes a formal deterministic model via WebAssembly inside a strictly bounded Trytet sovereign sandbox.",
+            input_schema: schema_for_type::<worlds::WasmWorldInput>(),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "FiscalWorld",
+            description: "High-precision financial engine for tax, loans, and investment analysis.",
+            input_schema: schema_for_type::<worlds::FiscalWorldInput>(),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "JurisprudenceWorld",
+            description: "Formal logic engine for legal risk analysis and procedural deadline calculation.",
+            input_schema: schema_for_type::<worlds::JurisprudenceWorldInput>(),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "OptimaWorld",
+            description: "Operations Research (OR) solver for combinatorial math and packing problems.",
+            input_schema: schema_for_type::<worlds::OptimaWorldInput>(),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "KinematicWorld",
+            description: "Geometric Constraint Solver for strict 2D/3D spatial reasoning and layouts.",
+            input_schema: schema_for_type::<worlds::KinematicWorldInput>(),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "LogisticsWorld",
+            description: "Routing, scheduling, and optimal to-do lists leveraging heuristic algorithms (TSP/VRP) and cognitive load modeling.",
+            input_schema: schema_for_type::<worlds::LogisticsWorldInput>(),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "DiscoveryWorld",
+            description: "Contextual Compaction engine for high-speed structural mapping of codebases (AST/Symbol extraction).",
+            input_schema: schema_for_type::<worlds::DiscoveryWorldInput>(),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "LiveWorld",
+            description: "Secure data ingestion engine for real-time structured API requests (Sports, Weather, Traffic).",
+            input_schema: schema_for_type::<worlds::LiveWorldInput>(),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "SymbolWorld",
+            description: "Lightweight LSP engine for semantic symbol lookup, Go To Definition, and reference finding.",
+            input_schema: schema_for_type::<worlds::SymbolWorldInput>(),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "ParityWorld",
+            description: "Structural parity engine for verifying code idiomaticity, indentation, and naming conventions.",
+            input_schema: schema_for_type::<worlds::ParityWorldInput>(),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "NutritionWorld",
+            description: "Advanced nutritional engine for meal plan optimization, macro/micro-nutrient math, and fridge-inventory-aware diet design.",
+            input_schema: schema_for_type::<worlds::NutritionWorldInput>(),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "StatWorld",
+            description: "Local sovereign stat ledger powered by SQLite for high-performance coefficient lookup and structured ingestion.",
+            input_schema: schema_for_type::<worlds::StatWorldInput>(),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "MarketWorld",
+            description: "Quantitative finance kernel for asset price path simulation (GBM) and historical strategy backtesting.",
+            input_schema: schema_for_type::<worlds::MarketWorldInput>(),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "ElectoralWorld",
+            description: "Political forecasting kernel for Bayesian polling aggregation and Electoral College Monte Carlo simulation.",
+            input_schema: schema_for_type::<worlds::ElectoralWorldInput>(),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "BayesianWorld",
+            description: "Probabilistic Inference Engine for strict Bayesian updating and calculating exact posterior probabilities.",
+            input_schema: schema_for_type::<worlds::BayesianWorldInput>(),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "MemoryWorld",
+            description: "Cross-session memory persistence for global facts and project preferences.",
+            input_schema: schema_for_type::<worlds::core::MemoryWorldInput>(),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "ActuarialWorld",
+            description: "High-precision actuarial engine for risk simulation and probability distributions.",
+            input_schema: schema_for_type::<worlds::ActuarialWorldInput>(),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "SportsWorld",
+            description: "High-fidelity sports match engine using minute-by-minute discrete event simulation.",
+            input_schema: schema_for_type::<worlds::SportsWorldInput>(),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "enter_plan_mode",
+            description: "Switch to Plan Mode to safely research, design, and plan complex changes using read-only tools.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "reason": { "type": "string" }
+                },
+                "required": ["reason"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "Delegate",
+            description: "Spawns an isolated sub-agent to handle a specialized task.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "subagent_type": { "type": "string" },
+                    "description": { "type": "string" },
+                    "prompt": { "type": "string" }
+                },
+                "required": ["subagent_type", "description", "prompt"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
     ]
+}
+
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum VisualArtifact {
+    Histogram { title: String, data: Vec<f64>, bins: usize },
+    GanttChart { title: String, events: Vec<GanttEvent> },
+    Table { title: String, headers: Vec<String>, rows: Vec<Vec<String>> },
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct GanttEvent { pub label: String, pub start: f64, pub end: f64, pub status: String }
+
+fn with_metadata(input: &Value, f: impl FnOnce(u64) -> Result<(Value, Option<VisualArtifact>), String>) -> Result<String, String> {
+    let start = std::time::Instant::now();
+    let seed = input.get("seed").and_then(|v| v.as_u64()).unwrap_or_else(|| rand::random());
+    
+    let (mut result, artifact) = f(seed)?;
+    
+    if let Some(obj) = result.as_object_mut() {
+        obj.insert("_metadata".to_string(), json!({
+            "execution_time_ns": start.elapsed().as_nanos(),
+            "prng_seed": seed,
+            "artifact": artifact
+        }));
+    }
+
+    if let Some(art) = &artifact {
+        // Detect if we are in terminal mode. 
+        // For Klako, we assume terminal if KLAKO_ENV is not 'browser'.
+        if std::env::var("KLAKO_ENV").unwrap_or_default() != "browser" {
+            let rendered = render::terminal::render_terminal_artifact(art);
+            eprintln!("{}", rendered);
+        } else {
+            // Emit telemetry for the browser to catch
+            agent::emit_telemetry(json!({
+                "type": "VisualArtifact",
+                "artifact": art
+            }));
+        }
+    }
+
+    to_pretty_json(result)
 }
 
 pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
@@ -559,6 +769,10 @@ pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
             .and_then(|i| to_pretty_json(misc::execute_skill(i)?)),
         "Agent" => from_value::<agent::AgentInput>(input)
             .and_then(|i| to_pretty_json(agent::execute_agent(i)?)),
+        "Delegate" => from_value::<agent::AgentInput>(input)
+            .and_then(|i| to_pretty_json(agent::execute_agent(i)?)),
+        "enter_plan_mode" => from_value::<misc::PlanModeInput>(input)
+            .and_then(|i| to_pretty_json(misc::execute_plan_mode(i)?)),
         "ToolSearch" => from_value::<misc::ToolSearchInput>(input)
             .and_then(|i| to_pretty_json(misc::execute_tool_search(i))),
         "NotebookEdit" => from_value::<notebook::NotebookEditInput>(input)
@@ -567,14 +781,54 @@ pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
             .and_then(|i| to_pretty_json(misc::execute_sleep(i))),
         "SendUserMessage" | "Brief" => from_value::<misc::BriefInput>(input)
             .and_then(|i| to_pretty_json(misc::execute_brief(i)?)),
-        "Config" => from_value::<config::ConfigInput>(input)
-            .and_then(|i| to_pretty_json(config::execute_config(i)?)),
         "StructuredOutput" => from_value::<misc::StructuredOutputInput>(input)
             .and_then(|i| to_pretty_json(misc::execute_structured_output(i))),
         "REPL" => from_value::<misc::ReplInput>(input)
             .and_then(|i| to_pretty_json(misc::execute_repl(i)?)),
         "PowerShell" => from_value::<misc::PowerShellInput>(input)
             .and_then(|i| to_pretty_json(misc::execute_powershell(i).map_err(|e| e.to_string())?)),
+        "Config" => from_value::<config::ConfigInput>(input)
+            .and_then(|i| to_pretty_json(config::execute_config(i)?)),
+        "TemporalWorld" => from_value::<worlds::TemporalWorldInput>(input)
+            .and_then(|i| with_metadata(input, |_seed| Ok((worlds::execute_temporal_world(i)?, None)))),
+        "PhysicsWorld" => from_value::<worlds::PhysicsWorldInput>(input)
+            .and_then(|i| with_metadata(input, |_seed| Ok((worlds::execute_physics_world(i)?, None)))),
+        "WasmWorld" => from_value::<worlds::WasmWorldInput>(input)
+            .and_then(|i| with_metadata(input, |_seed| Ok((worlds::execute_wasm_world(i)?, None)))),
+        "FiscalWorld" => from_value::<worlds::FiscalWorldInput>(input)
+            .and_then(|i| with_metadata(input, |_seed| Ok((worlds::execute_fiscal_world(i)?, None)))),
+        "JurisprudenceWorld" => from_value::<worlds::JurisprudenceWorldInput>(input)
+            .and_then(|i| with_metadata(input, |_seed| Ok((worlds::execute_jurisprudence_world(i)?, None)))),
+        "OptimaWorld" => from_value::<worlds::OptimaWorldInput>(input)
+            .and_then(|i| with_metadata(input, |_seed| Ok((worlds::execute_optima_world(i)?, None)))),
+        "KinematicWorld" => from_value::<worlds::KinematicWorldInput>(input)
+            .and_then(|i| with_metadata(input, |_seed| Ok((worlds::execute_kinematic_world(i)?, None)))),
+        "LogisticsWorld" => from_value::<worlds::LogisticsWorldInput>(input)
+            .and_then(|i| with_metadata(input, |seed| worlds::execute_logistics_world(i, seed))),
+        "MemoryWorld" => from_value::<worlds::core::MemoryWorldInput>(input)
+            .and_then(|i| with_metadata(input, |_seed| Ok((worlds::execute_memory_world(i)?, None)))),
+        "DiscoveryWorld" => from_value::<worlds::DiscoveryWorldInput>(input)
+            .and_then(|i| with_metadata(input, |_seed| Ok((worlds::execute_discovery_world(i)?, None)))),
+        "LiveWorld" => from_value::<worlds::LiveWorldInput>(input)
+            .and_then(|i| with_metadata(input, |_seed| Ok((worlds::execute_live_world(i)?, None)))),
+        "SymbolWorld" => from_value::<worlds::SymbolWorldInput>(input)
+            .and_then(|i| with_metadata(input, |_seed| Ok((worlds::execute_symbol_world(i)?, None)))),
+        "ParityWorld" => from_value::<worlds::ParityWorldInput>(input)
+            .and_then(|i| with_metadata(input, |_seed| Ok((worlds::execute_parity_world(i)?, None)))),
+        "NutritionWorld" => from_value::<worlds::NutritionWorldInput>(input)
+            .and_then(|i| with_metadata(input, |_seed| worlds::execute_nutrition_world(i))),
+        "StatWorld" => from_value::<worlds::StatWorldInput>(input)
+            .and_then(|i| with_metadata(input, |_seed| Ok((worlds::execute_stat_world(i)?, None)))),
+        "MarketWorld" => from_value::<worlds::MarketWorldInput>(input)
+            .and_then(|i| with_metadata(input, |seed| worlds::execute_market_world(i, seed))),
+        "ElectoralWorld" => from_value::<worlds::ElectoralWorldInput>(input)
+            .and_then(|i| with_metadata(input, |seed| worlds::execute_electoral_world(i, seed))),
+        "BayesianWorld" => from_value::<worlds::BayesianWorldInput>(input)
+            .and_then(|i| with_metadata(input, |_seed| Ok((worlds::execute_bayesian_world(i)?, None)))),
+        "ActuarialWorld" => from_value::<worlds::ActuarialWorldInput>(input)
+            .and_then(|i| with_metadata(input, |seed| worlds::execute_actuarial_world(i, seed))),
+        "SportsWorld" => from_value::<worlds::SportsWorldInput>(input)
+            .and_then(|i| with_metadata(input, |seed| worlds::execute_sports_world(i, seed))),
         _ => Err(format!("unsupported tool: {name}")),
     }
 }
@@ -624,8 +878,26 @@ struct GlobSearchInputValue {
 }
 
 fn run_bash(input: BashCommandInput) -> Result<String, String> {
-    serde_json::to_string_pretty(&execute_bash(input).map_err(|error| error.to_string())?)
-        .map_err(|error| error.to_string())
+    let output = execute_bash(input).map_err(|error| error.to_string())?;
+    
+    // If the command failed with a non-zero exit code, return an Err so the model 
+    // sees is_error=true, but make sure to include the actual stderr/stdout in the message!
+    if let Some(ref code_msg) = output.return_code_interpretation {
+        if code_msg.starts_with("exit_code:") || code_msg == "timeout" {
+            let mut err_msg = format!("Command failed -> {code_msg}\n");
+            let stderr_trimmed = output.stderr.trim();
+            let stdout_trimmed = output.stdout.trim();
+            if !stderr_trimmed.is_empty() {
+                err_msg.push_str(&format!("\n[stderr]\n{stderr_trimmed}"));
+            }
+            if !stdout_trimmed.is_empty() {
+                err_msg.push_str(&format!("\n[stdout]\n{stdout_trimmed}"));
+            }
+            return Err(err_msg);
+        }
+    }
+
+    serde_json::to_string_pretty(&output).map_err(|error| error.to_string())
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -1136,6 +1408,7 @@ mod tests {
         let _guard = env_lock()
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _agent_store_guard = EnvGuard::new("KLA_AGENT_STORE");
         let dir = temp_path("agent-store");
         std::env::set_var("KLA_AGENT_STORE", &dir);
         let captured = Arc::new(Mutex::new(None::<AgentJob>));
@@ -1148,6 +1421,7 @@ mod tests {
                 subagent_type: Some("Explore".to_string()),
                 name: Some("ship-audit".to_string()),
                 model: None,
+                allowed_tools: None,
             },
             move |job| {
                 *captured_for_spawn
@@ -1157,7 +1431,6 @@ mod tests {
             },
         )
         .expect("Agent should succeed");
-        std::env::remove_var("KLA_AGENT_STORE");
 
         assert_eq!(manifest.name, "ship-audit");
         assert_eq!(manifest.subagent_type.as_deref(), Some("Explore"));
@@ -1213,6 +1486,7 @@ mod tests {
         let _guard = env_lock()
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _agent_store_guard = EnvGuard::new("KLA_AGENT_STORE");
         let dir = temp_path("agent-runner");
         std::env::set_var("KLA_AGENT_STORE", &dir);
 
@@ -1223,6 +1497,7 @@ mod tests {
                 subagent_type: Some("Explore".to_string()),
                 name: Some("complete-task".to_string()),
                 model: Some("claude-sonnet-4-6".to_string()),
+                allowed_tools: None,
             },
             |job| {
                 persist_agent_terminal_state(
@@ -1249,6 +1524,7 @@ mod tests {
                 subagent_type: Some("Verification".to_string()),
                 name: Some("fail-task".to_string()),
                 model: None,
+                allowed_tools: None,
             },
             |job| {
                 persist_agent_terminal_state(
@@ -1276,6 +1552,7 @@ mod tests {
                 subagent_type: None,
                 name: Some("spawn-error".to_string()),
                 model: None,
+                allowed_tools: None,
             },
             |_| Err(String::from("thread creation failed")),
         )
@@ -1296,7 +1573,6 @@ mod tests {
         assert!(spawn_error_manifest.contains("\"status\": \"failed\""));
         assert!(spawn_error_manifest.contains("thread creation failed"));
 
-        std::env::remove_var("KLA_AGENT_STORE");
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1321,6 +1597,11 @@ mod tests {
         assert!(verification.contains("bash"));
         assert!(verification.contains("PowerShell"));
         assert!(!verification.contains("write_file"));
+
+        let logistics = allowed_tools_for_subagent("Logistics");
+        assert!(logistics.contains("LogisticsWorld"));
+        assert!(logistics.contains("TemporalWorld"));
+        assert!(!logistics.contains("bash"));
     }
 
     #[derive(Debug)]
@@ -1370,7 +1651,7 @@ mod tests {
                 calls: 0,
                 input_path: path.display().to_string(),
             },
-            SubagentToolExecutor::new(BTreeSet::from([String::from("read_file")])),
+            SubagentToolExecutor::new(String::from("test-agent"), BTreeSet::from([String::from("read_file")])),
             agent_permission_policy(),
             vec![String::from("system prompt")],
         );
@@ -1546,6 +1827,9 @@ mod tests {
 
     #[test]
     fn bash_tool_reports_success_exit_failure_timeout_and_background() {
+        let _guard = env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let success = execute_tool("bash", &json!({ "command": "printf 'hello'" }))
             .expect("bash should succeed");
         let success_output: serde_json::Value = serde_json::from_str(&success).expect("json");
@@ -1553,23 +1837,14 @@ mod tests {
         assert_eq!(success_output["interrupted"], false);
 
         let failure = execute_tool("bash", &json!({ "command": "printf 'oops' >&2; exit 7" }))
-            .expect("bash failure should still return structured output");
-        let failure_output: serde_json::Value = serde_json::from_str(&failure).expect("json");
-        assert_eq!(failure_output["returnCodeInterpretation"], "exit_code:7");
-        assert!(failure_output["stderr"]
-            .as_str()
-            .expect("stderr")
-            .contains("oops"));
+            .expect_err("bash failure should return Err to trigger is_error=true");
+        assert!(failure.contains("exit_code:7"));
+        assert!(failure.contains("oops"));
 
         let timeout = execute_tool("bash", &json!({ "command": "sleep 1", "timeout": 10 }))
-            .expect("bash timeout should return output");
-        let timeout_output: serde_json::Value = serde_json::from_str(&timeout).expect("json");
-        assert_eq!(timeout_output["interrupted"], true);
-        assert_eq!(timeout_output["returnCodeInterpretation"], "timeout");
-        assert!(timeout_output["stderr"]
-            .as_str()
-            .expect("stderr")
-            .contains("Command exceeded timeout"));
+            .expect_err("bash timeout should return Err to trigger is_error=true");
+        assert!(timeout.contains("timeout"));
+        assert!(timeout.contains("Command exceeded timeout"));
 
         let background = execute_tool(
             "bash",
@@ -1581,14 +1856,32 @@ mod tests {
         assert_eq!(background_output["noOutputExpected"], true);
     }
 
+    struct CwdGuard {
+        original: std::path::PathBuf,
+    }
+
+    impl CwdGuard {
+        fn new() -> Self {
+            Self {
+                original: std::env::current_dir().expect("get current dir"),
+            }
+        }
+    }
+
+    impl Drop for CwdGuard {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.original);
+        }
+    }
+
     #[test]
     fn file_tools_cover_read_write_and_edit_behaviors() {
         let _guard = env_lock()
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _cwd_guard = CwdGuard::new();
         let root = temp_path("fs-suite");
         fs::create_dir_all(&root).expect("create root");
-        let original_dir = std::env::current_dir().expect("cwd");
         std::env::set_current_dir(&root).expect("set cwd");
 
         let write_create = execute_tool(
@@ -1688,7 +1981,6 @@ mod tests {
         .expect_err("missing substring should fail");
         assert!(edit_missing.contains("old_string not found"));
 
-        std::env::set_current_dir(&original_dir).expect("restore cwd");
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1697,9 +1989,9 @@ mod tests {
         let _guard = env_lock()
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _cwd_guard = CwdGuard::new();
         let root = temp_path("search-suite");
         fs::create_dir_all(root.join("nested")).expect("create root");
-        let original_dir = std::env::current_dir().expect("cwd");
         std::env::set_current_dir(&root).expect("set cwd");
 
         fs::write(
@@ -1760,7 +2052,6 @@ mod tests {
         .expect_err("invalid regex should fail");
         assert!(!grep_error.is_empty());
 
-        std::env::set_current_dir(&original_dir).expect("restore cwd");
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1807,11 +2098,38 @@ mod tests {
         let _ = std::fs::remove_file(attachment);
     }
 
+    struct EnvGuard {
+        key: String,
+        original: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn new(key: &str) -> Self {
+            Self {
+                key: key.to_string(),
+                original: std::env::var(key).ok(),
+            }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.original {
+                Some(value) => std::env::set_var(&self.key, value),
+                None => std::env::remove_var(&self.key),
+            }
+        }
+    }
+
     #[test]
     fn config_reads_and_writes_supported_values() {
         let _guard = env_lock()
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _cwd_guard = CwdGuard::new();
+        let _home_guard = EnvGuard::new("HOME");
+        let _config_home_guard = EnvGuard::new("CLAW_CONFIG_HOME");
+
         let root = std::env::temp_dir().join(format!(
             "claw-config-{}",
             std::time::SystemTime::now()
@@ -1829,9 +2147,6 @@ mod tests {
         )
         .expect("write global settings");
 
-        let original_home = std::env::var("HOME").ok();
-        let original_config_home = std::env::var("CLAW_CONFIG_HOME").ok();
-        let original_dir = std::env::current_dir().expect("cwd");
         std::env::set_var("HOME", &home);
         std::env::remove_var("CLAW_CONFIG_HOME");
         std::env::set_current_dir(&cwd).expect("set cwd");
@@ -1847,6 +2162,7 @@ mod tests {
         .expect("set config");
         let set_output: serde_json::Value = serde_json::from_str(&set).expect("json");
         assert_eq!(set_output["operation"], "set");
+
         assert_eq!(set_output["newValue"], "plan");
 
         let invalid = execute_tool(
@@ -1861,15 +2177,6 @@ mod tests {
         let unknown_output: serde_json::Value = serde_json::from_str(&unknown).expect("json");
         assert_eq!(unknown_output["success"], false);
 
-        std::env::set_current_dir(&original_dir).expect("restore cwd");
-        match original_home {
-            Some(value) => std::env::set_var("HOME", value),
-            None => std::env::remove_var("HOME"),
-        }
-        match original_config_home {
-            Some(value) => std::env::set_var("CLAW_CONFIG_HOME", value),
-            None => std::env::remove_var("CLAW_CONFIG_HOME"),
-        }
         let _ = std::fs::remove_dir_all(root);
     }
 

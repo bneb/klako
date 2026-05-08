@@ -37,18 +37,57 @@ async fn test_swarm_orchestrator_full_lifecycle() {
 }
 
 #[tokio::test]
-async fn test_swarm_orchestrator_spawns_subagent_via_tools() {
+async fn test_swarm_orchestrator_empirical_verification_lifecycle() {
     let session = Session::new();
     let objective = SwarmObjective {
-        description: "Verify spawn logic".to_string(),
+        description: "Test verification".to_string(),
     };
     let mut orchestrator = SwarmOrchestrator::new(session, objective, Box::new(MockApiClient));
     orchestrator.start().await.expect("Start failed");
-    orchestrator.tick().await.expect("Tick failed");
     
-    let agents = orchestrator.agents();
-    assert_eq!(agents.len(), 1);
-    assert!(agents[0].id.starts_with("agent-") || !agents[0].id.is_empty(), "Should have a real agent id");
-    // Since tick should actually spawn an agent using tools::Delegate, we should verify the agent's properties.
-    assert_eq!(agents[0].subagent_type, "Engineer");
+    // Manually set a verification tool for the first task
+    if let Some(task) = orchestrator.tasks_mut().get_mut(0) {
+        task.verification_tool = Some("Sleep".to_string());
+        task.verification_input = Some(serde_json::json!({ "duration_ms": 0 }));
+    }
+    
+    orchestrator.tick().await.expect("Tick 1 failed"); // Spawn agent
+    assert_eq!(orchestrator.tasks()[0].status, SwarmTaskStatus::Running);
+    
+    orchestrator.complete_task(0, "Done".to_string()).await.expect("Complete failed");
+    assert_eq!(orchestrator.tasks()[0].status, SwarmTaskStatus::Verifying);
+    
+    orchestrator.tick().await.expect("Tick 2 failed"); // Run verification
+    assert_eq!(orchestrator.tasks()[0].status, SwarmTaskStatus::Completed);
+    
+    orchestrator.tick().await.expect("Tick 3 failed"); // Transition status to Completed
+    assert_eq!(orchestrator.status(), SwarmStatus::Completed);
+}
+
+#[tokio::test]
+async fn test_swarm_orchestrator_verification_failure() {
+    let session = Session::new();
+    let objective = SwarmObjective {
+        description: "Test failure".to_string(),
+    };
+    let mut orchestrator = SwarmOrchestrator::new(session, objective, Box::new(MockApiClient));
+    orchestrator.start().await.expect("Start failed");
+    
+    // Manually set a verification tool that will fail (invalid tool name)
+    if let Some(task) = orchestrator.tasks_mut().get_mut(0) {
+        task.verification_tool = Some("NonExistentTool".to_string());
+        task.verification_input = Some(serde_json::json!({}));
+    }
+    
+    orchestrator.tick().await.expect("Tick 1 failed");
+    orchestrator.complete_task(0, "Done".to_string()).await.expect("Complete failed");
+    
+    orchestrator.tick().await.expect("Tick 2 failed"); // Run verification (fails because tool doesn't exist)
+    
+    if let SwarmTaskStatus::Failed(err) = &orchestrator.tasks()[0].status {
+        assert!(err.contains("Verification failed"));
+        assert!(err.contains("unsupported tool"));
+    } else {
+        panic!("Task should have failed verification");
+    }
 }
