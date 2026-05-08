@@ -442,8 +442,8 @@ body[data-router-state="active"] #prompt-input::placeholder {
     color: var(--status-typist);
 }
 
-/* MECHANICS PANE, STEERABLE PANE, SPRINT PANE */
-#mechanics-pane, #steerable-pane, #sprint-pane {
+/* MECHANICS PANE, STEERABLE PANE, SPRINT PANE, REVIEW PANE */
+#mechanics-pane, #steerable-pane, #sprint-pane, #review-pane {
     flex: 1 1 45%;
     min-width: 400px;
     min-height: 0;
@@ -465,8 +465,43 @@ body[data-router-state="active"] #prompt-input::placeholder {
     to { opacity: 1; transform: scale(1); }
 }
 
-#mechanics-pane.visible, #steerable-pane.visible, #sprint-pane.visible {
+#mechanics-pane.visible, #steerable-pane.visible, #sprint-pane.visible, #review-pane.visible {
     display: flex; /* Show when toggled */
+}
+
+/* REVIEW PANE EXTRAS */
+#review-content {
+    flex: 1;
+    padding: 24px;
+    overflow-y: auto;
+    font-size: 0.95rem;
+    line-height: 1.6;
+    user-select: text;
+}
+
+#review-selection-popup {
+    position: absolute;
+    z-index: 1000;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-focus);
+    box-shadow: var(--shadow-float);
+    border-radius: var(--radius-sm);
+    padding: 4px;
+}
+
+#review-selection-popup button {
+    background: var(--accent-brand);
+    color: white;
+    border: none;
+    padding: 6px 12px;
+    border-radius: var(--radius-sm);
+    font-weight: 500;
+    cursor: pointer;
+    font-size: 0.85rem;
+}
+
+#review-selection-popup button:hover {
+    background: var(--status-typist);
 }
 
 #router-status {

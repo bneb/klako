@@ -96,6 +96,7 @@ pub fn handle_slash_command(
         SlashCommand::Status
         | SlashCommand::Retro
         | SlashCommand::Design { .. }
+        | SlashCommand::Review { .. }
         | SlashCommand::Branch { .. }
         | SlashCommand::Bughunter { .. }
         | SlashCommand::Worktree { .. }
@@ -491,7 +492,8 @@ mod tests {
         assert!(help.contains("aliases: /swarm"));
         assert!(help.contains("/retro"));
         assert!(help.contains("/design <feature>"));
-        assert_eq!(slash_command_specs().len(), 31);
+        assert!(help.contains("/review <path>"));
+        assert_eq!(slash_command_specs().len(), 32);
         assert_eq!(resume_supported_slash_commands().len(), 13);
     }
 

@@ -282,6 +282,14 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         resume_supported: false,
         category: SlashCommandCategory::Automation,
     },
+    SlashCommandSpec {
+        name: "review",
+        aliases: &[],
+        summary: "Open an interactive design document review session",
+        argument_hint: Some("<path>"),
+        resume_supported: false,
+        category: SlashCommandCategory::Automation,
+    },
 ];
 
 // ── Slash command enum ───────────────────────────────────────────────
@@ -294,6 +302,9 @@ pub enum SlashCommand {
     Retro,
     Design {
         feature: Option<String>,
+    },
+    Review {
+        path: Option<String>,
     },
     Loop {
         objective: Option<String>,
@@ -385,6 +396,9 @@ impl SlashCommand {
             "retro" => Self::Retro,
             "design" => Self::Design {
                 feature: remainder_after_command(trimmed, command),
+            },
+            "review" => Self::Review {
+                path: remainder_after_command(trimmed, command),
             },
             "loop" | "swarm" => {
                 let remainder = remainder_after_command(trimmed, command);

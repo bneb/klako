@@ -22,6 +22,7 @@
                     <button id="toggle-swarm" class="icon-toggle" aria-label="Toggle Swarm Mode">🐝 Swarm</button>
                     <button id="toggle-sprint" class="icon-toggle" aria-label="Toggle Sprint Board">☑ Sprint</button>
                     <button id="toggle-steerable" class="icon-toggle" aria-label="Toggle Plan Editor">▤ Plan</button>
+                    <button id="toggle-review" class="icon-toggle" aria-label="Toggle Review Pane">✎ Review</button>
                     <button id="toggle-mechanics" class="icon-toggle" aria-label="Toggle Telemetry">⚡ Tlm</button>
                 </div>
             </header>
@@ -81,6 +82,20 @@
                 </div>
             </header>
             <div id="steerable-content"></div>
+        </aside>
+
+        <aside id="review-pane">
+            <header class="pane-header">
+                <span class="brand-wordmark" id="review-doc-title">Design Document Review</span>
+                <div class="pane-actions">
+                    <button class="close-pane-btn icon-btn" aria-label="Close Review Pane" data-target="review-pane">✕</button>
+                </div>
+            </header>
+            <div id="review-content" class="markdown-body"></div>
+            <!-- Interactive pop-up for selection -->
+            <div id="review-selection-popup" class="hidden">
+                <button id="discuss-selection-btn">Discuss with Klako</button>
+            </div>
         </aside>
 
         <div id="input-zone">

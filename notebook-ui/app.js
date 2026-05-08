@@ -78,6 +78,7 @@ class KlakoFlightDeck {
         this.bindEvents();
         this.bindPaneToggles();
         this.bindCopyUtilities();
+        this.bindReviewInteractions();
         this.startGPULoop();
         
         const urlParams = new URLSearchParams(window.location.search);
@@ -208,16 +209,19 @@ class KlakoFlightDeck {
         const toggleMechanics = document.getElementById('toggle-mechanics');
         const toggleSteerable = document.getElementById('toggle-steerable');
         const toggleSprint = document.getElementById('toggle-sprint');
+        const toggleReview = document.getElementById('toggle-review');
         const toggleSwarm = document.getElementById('toggle-swarm');
         const mechanicsPane = document.getElementById('mechanics-pane');
         const steerablePane = document.getElementById('steerable-pane');
         const sprintPane = document.getElementById('sprint-pane');
+        const reviewPane = document.getElementById('review-pane');
 
         const updateGridLayout = () => {
             let activeCount = 1; // Narrative pane always open
             if (mechanicsPane && mechanicsPane.classList.contains('visible')) activeCount++;
             if (steerablePane && steerablePane.classList.contains('visible')) activeCount++;
             if (sprintPane && sprintPane.classList.contains('visible')) activeCount++;
+            if (reviewPane && reviewPane.classList.contains('visible')) activeCount++;
             
             if (activeCount >= 3) {
                 chassis.classList.add('grid-2x2');
@@ -226,7 +230,7 @@ class KlakoFlightDeck {
             }
             
             if (toggleSwarm) {
-                if (activeCount === 4) {
+                if (activeCount >= 4 && !reviewPane.classList.contains('visible')) {
                     toggleSwarm.classList.add('active');
                 } else {
                     toggleSwarm.classList.remove('active');
@@ -252,6 +256,7 @@ class KlakoFlightDeck {
 
         if (toggleMechanics) toggleMechanics.addEventListener('click', () => togglePane(mechanicsPane, toggleMechanics));
         if (toggleSteerable) toggleSteerable.addEventListener('click', () => togglePane(steerablePane, toggleSteerable));
+        if (toggleReview) toggleReview.addEventListener('click', () => togglePane(reviewPane, toggleReview));
         if (toggleSprint) {
             toggleSprint.addEventListener('click', () => {
                 togglePane(sprintPane, toggleSprint);
@@ -284,6 +289,7 @@ class KlakoFlightDeck {
                 if (targetId === 'mechanics-pane' && toggleMechanics) toggleMechanics.classList.remove('active');
                 if (targetId === 'steerable-pane' && toggleSteerable) toggleSteerable.classList.remove('active');
                 if (targetId === 'sprint-pane' && toggleSprint) toggleSprint.classList.remove('active');
+                if (targetId === 'review-pane' && toggleReview) toggleReview.classList.remove('active');
                 updateGridLayout();
             });
         });
@@ -316,6 +322,54 @@ class KlakoFlightDeck {
                 });
             });
         }
+    }
+
+    bindReviewInteractions() {
+        const reviewContent = document.getElementById('review-content');
+        const popup = document.getElementById('review-selection-popup');
+        const discussBtn = document.getElementById('discuss-selection-btn');
+        
+        if (!reviewContent || !popup || !discussBtn) return;
+        
+        let currentSelection = '';
+        
+        reviewContent.addEventListener('mouseup', (e) => {
+            const selection = window.getSelection();
+            const text = selection.toString().trim();
+            
+            if (text.length > 0) {
+                currentSelection = text;
+                const range = selection.getRangeAt(0);
+                const rect = range.getBoundingClientRect();
+                
+                // Position popup above selection
+                popup.style.left = `${rect.left + window.scrollX}px`;
+                popup.style.top = `${rect.top + window.scrollY - popup.offsetHeight - 10}px`;
+                popup.classList.remove('hidden');
+            } else {
+                popup.classList.add('hidden');
+                currentSelection = '';
+            }
+        });
+        
+        // Hide on mousedown if clicking outside popup
+        document.addEventListener('mousedown', (e) => {
+            if (!popup.contains(e.target)) {
+                popup.classList.add('hidden');
+            }
+        });
+        
+        discussBtn.addEventListener('click', () => {
+            if (currentSelection) {
+                const promptText = `I have a question about this section of the design document:\n\n> ${currentSelection}\n\nCan you review this using SymbolWorld and give me your thoughts?`;
+                this.appendUserMessage(promptText);
+                if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                    this.ws.send(JSON.stringify({ type: "SubmitPrompt", text: promptText }));
+                }
+                popup.classList.add('hidden');
+                window.getSelection().removeAllRanges();
+            }
+        });
     }
 
     bindEvents() {
@@ -397,6 +451,28 @@ class KlakoFlightDeck {
                     // Force open the pane
                     if (!steerablePane.classList.contains('visible')) {
                         const toggleBtn = document.getElementById('toggle-steerable');
+                        if (toggleBtn) toggleBtn.click();
+                    }
+                }
+                break;
+            case "OpenReviewPane":
+                const reviewPane = document.getElementById('review-pane');
+                const reviewContent = document.getElementById('review-content');
+                const reviewDocTitle = document.getElementById('review-doc-title');
+                
+                if (reviewPane && reviewContent) {
+                    if (reviewDocTitle) {
+                        reviewDocTitle.textContent = `Review: ${payload.file_path}`;
+                    }
+                    reviewContent.innerHTML = DOMPurify.sanitize(marked.parse(payload.content || "*Empty document*"));
+                    
+                    reviewContent.querySelectorAll('pre code').forEach((block) => {
+                        hljs.highlightElement(block);
+                    });
+
+                    // Force open the pane
+                    if (!reviewPane.classList.contains('visible')) {
+                        const toggleBtn = document.getElementById('toggle-review');
                         if (toggleBtn) toggleBtn.click();
                     }
                 }
