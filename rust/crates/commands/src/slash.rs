@@ -274,6 +274,14 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         resume_supported: false,
         category: SlashCommandCategory::Automation,
     },
+    SlashCommandSpec {
+        name: "design",
+        aliases: &[],
+        summary: "Initiate a collaborative technical design brainstorming session",
+        argument_hint: Some("<feature>"),
+        resume_supported: false,
+        category: SlashCommandCategory::Automation,
+    },
 ];
 
 // ── Slash command enum ───────────────────────────────────────────────
@@ -284,6 +292,9 @@ pub enum SlashCommand {
     Status,
     Compact,
     Retro,
+    Design {
+        feature: Option<String>,
+    },
     Loop {
         objective: Option<String>,
         budget: Option<f64>,
@@ -372,6 +383,9 @@ impl SlashCommand {
             "status" => Self::Status,
             "compact" => Self::Compact,
             "retro" => Self::Retro,
+            "design" => Self::Design {
+                feature: remainder_after_command(trimmed, command),
+            },
             "loop" | "swarm" => {
                 let remainder = remainder_after_command(trimmed, command);
                 let mut objective = remainder.clone();

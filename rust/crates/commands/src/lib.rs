@@ -95,6 +95,7 @@ pub fn handle_slash_command(
         }),
         SlashCommand::Status
         | SlashCommand::Retro
+        | SlashCommand::Design { .. }
         | SlashCommand::Branch { .. }
         | SlashCommand::Bughunter { .. }
         | SlashCommand::Worktree { .. }
@@ -489,7 +490,8 @@ mod tests {
         assert!(help.contains("/loop <objective>"));
         assert!(help.contains("aliases: /swarm"));
         assert!(help.contains("/retro"));
-        assert_eq!(slash_command_specs().len(), 30);
+        assert!(help.contains("/design <feature>"));
+        assert_eq!(slash_command_specs().len(), 31);
         assert_eq!(resume_supported_slash_commands().len(), 13);
     }
 
