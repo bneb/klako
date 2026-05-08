@@ -286,6 +286,7 @@ pub enum SlashCommand {
     Dream,
     Loop {
         objective: Option<String>,
+        budget: Option<f64>,
     },
     Branch {
         action: Option<String>,
@@ -371,8 +372,25 @@ impl SlashCommand {
             "status" => Self::Status,
             "compact" => Self::Compact,
             "dream" => Self::Dream,
-            "loop" | "swarm" => Self::Loop {
-                objective: remainder_after_command(trimmed, command),
+            "loop" | "swarm" => {
+                let remainder = remainder_after_command(trimmed, command);
+                let mut objective = remainder.clone();
+                let mut budget = None;
+                
+                if let Some(rem) = remainder {
+                    if let Some(idx) = rem.find("--budget ") {
+                        let after_budget = &rem[idx + 9..];
+                        let amount_str = after_budget.split_whitespace().next().unwrap_or("");
+                        if let Ok(amount) = amount_str.parse::<f64>() {
+                            budget = Some(amount);
+                            // Remove the flag and amount from the objective
+                            let flag_str = format!("--budget {}", amount_str);
+                            let new_obj = rem.replace(&flag_str, "").trim().to_string();
+                            objective = if new_obj.is_empty() { None } else { Some(new_obj) };
+                        }
+                    }
+                }
+                Self::Loop { objective, budget }
             },
             "branch" => Self::Branch {
                 action: parts.next().map(ToOwned::to_owned),

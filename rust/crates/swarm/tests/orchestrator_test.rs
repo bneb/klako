@@ -16,6 +16,7 @@ async fn test_swarm_orchestrator_full_lifecycle() {
     let session = Session::new();
     let objective = SwarmObjective {
         description: "Test objective".to_string(),
+        budget: None,
     };
     
     let mut orchestrator = SwarmOrchestrator::new(session, objective, Box::new(MockApiClient));
@@ -44,6 +45,7 @@ async fn test_swarm_orchestrator_empirical_verification_lifecycle() {
     let session = Session::new();
     let objective = SwarmObjective {
         description: "Test verification".to_string(),
+        budget: None,
     };
     let mut orchestrator = SwarmOrchestrator::new(session, objective, Box::new(MockApiClient));
     orchestrator.start().await.expect("Start failed");
@@ -73,6 +75,7 @@ async fn test_swarm_orchestrator_verification_failure() {
     let session = Session::new();
     let objective = SwarmObjective {
         description: "Test failure".to_string(),
+        budget: None,
     };
     let mut orchestrator = SwarmOrchestrator::new(session, objective, Box::new(MockApiClient));
     orchestrator.start().await.expect("Start failed");

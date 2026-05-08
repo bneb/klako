@@ -13,6 +13,7 @@ pub enum SwarmStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SwarmObjective {
     pub description: String,
+    pub budget: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -175,6 +176,23 @@ impl SwarmOrchestrator {
             self.status = SwarmStatus::Completed;
             self.emit_ledger_update();
             return Ok(());
+        }
+
+        // Budget check
+        if let Some(budget) = self.objective.budget {
+            let mut total_cost = 0.0;
+            for agent in &self.agents {
+                let session_path = std::path::PathBuf::from(format!(".kla/sessions/session-{}.json", agent.id));
+                if let Ok(session) = runtime::Session::load_from_path(&session_path) {
+                    let tracker = runtime::UsageTracker::from_session(&session);
+                    total_cost += tracker.cumulative_usage().estimate_cost_usd().total_cost_usd();
+                }
+            }
+            if total_cost > budget {
+                self.status = SwarmStatus::Failed(format!("Budget exceeded: ${:.2} / ${:.2}", total_cost, budget));
+                self.emit_ledger_update();
+                return Ok(());
+            }
         }
 
         // 1. Check for tasks in Verifying state to run deterministic tools

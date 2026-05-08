@@ -390,8 +390,8 @@ impl LiveCli {
                 );
                 false
             }
-            SlashCommand::Loop { objective } => {
-                self.run_loop(objective.as_deref())?;
+            SlashCommand::Loop { objective, budget } => {
+                self.run_loop(objective.as_deref(), budget)?;
                 false
             }
             SlashCommand::Dream => {
@@ -773,9 +773,13 @@ impl LiveCli {
         self.run_internal_prompt_text_with_progress(prompt, enable_tools, None)
     }
 
-    fn run_loop(&self, objective: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    fn run_loop(&self, objective: Option<&str>, budget: Option<f64>) -> Result<(), Box<dyn std::error::Error>> {
         let objective = objective.unwrap_or("Solve the problem");
-        println!("Orchestrating swarm to: {}", objective);
+        if let Some(b) = budget {
+            println!("Orchestrating swarm to: {} (Budget: ${:.2})", objective, b);
+        } else {
+            println!("Orchestrating swarm to: {}", objective);
+        }
         
         // Build an ApiClient for the orchestrator
         let (_, tool_registry) = runtime_bridge::build_runtime_plugin_state()?;
@@ -792,6 +796,7 @@ impl LiveCli {
         
         let swarm_objective = swarm::SwarmObjective {
             description: objective.to_string(),
+            budget,
         };
         let mut orchestrator = swarm::SwarmOrchestrator::new(
             self.runtime.session().clone(),
