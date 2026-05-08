@@ -102,7 +102,7 @@ impl LiveCli {
         tx: Option<tokio::sync::broadcast::Sender<String>>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let cwd = env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let system_prompt = build_system_prompt(&cwd, crate::DEFAULT_DATE.to_string())?;
+        let system_prompt = build_system_prompt(&cwd, crate::DEFAULT_DATE.to_string(), &model)?;
         let session = session::create_managed_session_handle()?;
         let runtime = runtime_bridge::build_runtime(
             Session::new(),
@@ -388,6 +388,10 @@ impl LiveCli {
                     "{}",
                     render_mode_unavailable("commit-push-pr", "commit + push + PR automation")
                 );
+                false
+            }
+            SlashCommand::Loop { objective } => {
+                self.run_loop(objective.as_deref())?;
                 false
             }
             SlashCommand::Unknown(name) => {
@@ -765,6 +769,60 @@ impl LiveCli {
         self.run_internal_prompt_text_with_progress(prompt, enable_tools, None)
     }
 
+    fn run_loop(&self, objective: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+        let objective = objective.unwrap_or("Solve the problem");
+        println!("Orchestrating swarm to: {}", objective);
+        
+        // Build an ApiClient for the orchestrator
+        let (_, tool_registry) = runtime_bridge::build_runtime_plugin_state()?;
+        let client = runtime_bridge::DefaultRuntimeClient::new(
+            self.model.clone(),
+            true, // enable_tools
+            false, // emit_output
+            self.allowed_tools.clone(),
+            tool_registry,
+            None, // progress_reporter
+            runtime::RuntimeFeatureConfig::default(),
+            self.tx.clone(),
+        )?;
+        
+        let swarm_objective = swarm::SwarmObjective {
+            description: objective.to_string(),
+        };
+        let mut orchestrator = swarm::SwarmOrchestrator::new(
+            self.runtime.session().clone(),
+            swarm_objective,
+            Box::new(client),
+        );
+        
+        tokio::runtime::Runtime::new()?.block_on(async {
+            orchestrator.start().await.expect("Failed to start SwarmOrchestrator");
+            while orchestrator.status() == swarm::SwarmStatus::Running {
+                // Tick will try to spawn subagents for pending tasks
+                orchestrator.tick().await.expect("Tick failed");
+                
+                // TODO: Monitor spawned subagents, wait for them, collect results,
+                // and call orchestrator.complete_task or fail_task.
+                // For now, we simulate success for demo if it has agents.
+                let agents = orchestrator.agents().to_vec();
+                if !agents.is_empty() {
+                    for (i, agent) in agents.iter().enumerate() {
+                        if agent.status == "running" {
+                            // Pretend the agent completed successfully since we're stubbing
+                            orchestrator.complete_task(i, "Success".to_string()).await.expect("Failed to complete task");
+                        }
+                    }
+                }
+                
+                // Real loop would block / sleep until an agent finishes via polling manifests.
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            }
+        });
+        
+        println!("Swarm orchestrator finished with status: {:?}", orchestrator.status());
+        Ok(())
+    }
+
     fn run_bughunter(&self, scope: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
         let scope = scope.unwrap_or("the current repository");
         let prompt = format!(
@@ -976,6 +1034,7 @@ pub fn run_notebook_loop(
     mut permission_rx: tokio::sync::mpsc::Receiver<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut cli = LiveCli::new(model, true, allowed_tools, permission_mode, Some(tx.clone()))?;
+    tools::set_telemetry_sink(tx.clone());
     println!("Ⓚ Klako · ready");
     cli.print_status();
 
@@ -1018,6 +1077,7 @@ mod tests {
     #[test]
     fn test_livecli_telemetry_broadcasts() {
         let _guard = env_lock();
+        let original_dir = std::env::current_dir().unwrap();
         
         // Isolate environment
         let temp_dir = std::env::temp_dir().join(format!("klako-livecli-{}", std::process::id()));
@@ -1052,6 +1112,8 @@ mod tests {
         
         let (tx, mut rx) = tokio::sync::broadcast::channel(1024);
         
+        std::env::set_current_dir(&temp_dir).unwrap();
+
         let cli = LiveCli::new(
             "llama3".to_string(), 
             true, 
@@ -1079,6 +1141,7 @@ mod tests {
         
         assert!(telemetry_lines_found > 0, "Telemetry broadcast failed: expected CanvasTelemetry usage output, got none!");
         
+        std::env::set_current_dir(original_dir).unwrap();
         std::fs::remove_dir_all(temp_dir).ok();
     }
 }

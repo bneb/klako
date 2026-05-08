@@ -82,6 +82,13 @@ pub fn handle_slash_command(
                 session: result.compacted_session,
             })
         }
+        SlashCommand::Loop { objective } => {
+            let objective = objective.unwrap_or_else(|| "Solve the problem".to_string());
+            Some(SlashCommandResult {
+                message: format!("Looping autonomously to solve: {}", objective),
+                session: session.clone(),
+            })
+        }
         SlashCommand::Help => Some(SlashCommandResult {
             message: render_slash_command_help(),
             session: session.clone(),
@@ -478,7 +485,9 @@ mod tests {
         assert!(help.contains("aliases: /plugins, /marketplace"));
         assert!(help.contains("/agents"));
         assert!(help.contains("/skills"));
-        assert_eq!(slash_command_specs().len(), 28);
+        assert!(help.contains("/loop <objective>"));
+        assert!(help.contains("aliases: /swarm"));
+        assert_eq!(slash_command_specs().len(), 29);
         assert_eq!(resume_supported_slash_commands().len(), 13);
     }
 
