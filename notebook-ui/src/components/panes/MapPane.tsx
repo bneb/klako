@@ -1,8 +1,9 @@
 import React, { useMemo } from 'react';
 import { useStore } from '../../store/useStore';
-import { ReactFlow, Controls, Background, MiniMap } from '@xyflow/react';
+import { ReactFlow, Controls, Background, MiniMap, MarkerType } from '@xyflow/react';
 import type { Node, Edge } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
+import dagre from 'dagre';
 
 export const MapPane: React.FC = () => {
   const { mapData, mapVisible } = useStore();
@@ -13,22 +14,14 @@ export const MapPane: React.FC = () => {
     const generatedNodes: Node[] = [];
     const generatedEdges: Edge[] = [];
     
-    // Very basic grid layout for now
     const files = Object.keys(mapData);
-    const cols = Math.ceil(Math.sqrt(files.length));
     
-    files.forEach((filePath, idx) => {
+    files.forEach((filePath) => {
       const fileData = mapData[filePath];
-      
-      const row = Math.floor(idx / cols);
-      const col = idx % cols;
-      
-      const px = 100 + col * 350;
-      const py = 100 + row * 250;
       
       generatedNodes.push({
         id: filePath,
-        position: { x: px, y: py },
+        position: { x: 0, y: 0 },
         data: { 
           label: (
             <div className="flex flex-col gap-2 p-2 w-64 max-w-xs break-all">
@@ -52,9 +45,57 @@ export const MapPane: React.FC = () => {
         },
         className: 'bg-white border-2 border-indigo-200 rounded-xl shadow-md cursor-grab active:cursor-grabbing',
       });
+
+      // Generate Edges
+      if (fileData.dependencies && Array.isArray(fileData.dependencies)) {
+        fileData.dependencies.forEach((dep: string) => {
+          // Attempt to find a target node that represents this dependency
+          // For rust it might be `api`, for JS it might be `./app`
+          const cleanDep = dep.replace('./', '').replace('../', '');
+          const targetNode = files.find(f => f.includes(cleanDep) && f !== filePath);
+          
+          if (targetNode) {
+            generatedEdges.push({
+              id: `e-${filePath}-${targetNode}`,
+              source: filePath,
+              target: targetNode,
+              animated: true,
+              style: { stroke: '#818cf8', strokeWidth: 2 },
+              markerEnd: {
+                type: MarkerType.ArrowClosed,
+                color: '#818cf8',
+              },
+            });
+          }
+        });
+      }
     });
 
-    return { nodes: generatedNodes, edges: generatedEdges };
+    // Apply Dagre Layout
+    const dagreGraph = new dagre.graphlib.Graph();
+    dagreGraph.setDefaultEdgeLabel(() => ({}));
+    dagreGraph.setGraph({ rankdir: 'LR', ranksep: 150, nodesep: 100 }); // Left-to-Right layout is usually better for DAGs
+
+    generatedNodes.forEach((node) => {
+      dagreGraph.setNode(node.id, { width: 300, height: 150 });
+    });
+
+    generatedEdges.forEach((edge) => {
+      dagreGraph.setEdge(edge.source, edge.target);
+    });
+
+    dagre.layout(dagreGraph);
+
+    const layoutedNodes = generatedNodes.map((node) => {
+      const nodeWithPosition = dagreGraph.node(node.id);
+      node.position = {
+        x: nodeWithPosition.x - 150,
+        y: nodeWithPosition.y - 75,
+      };
+      return node;
+    });
+
+    return { nodes: layoutedNodes, edges: generatedEdges };
   }, [mapData]);
 
   if (!mapVisible) return null;
@@ -66,7 +107,7 @@ export const MapPane: React.FC = () => {
         <button onClick={() => useStore.setState({ mapVisible: false })} className="text-gray-400 hover:text-gray-600">✕</button>
       </div>
       <div className="flex-1 w-full h-full relative">
-        <ReactFlow nodes={nodes} edges={edges} fitView>
+        <ReactFlow nodes={nodes} edges={edges} fitView minZoom={0.1}>
           <Background color="#ccc" gap={16} />
           <Controls />
           <MiniMap zoomable pannable />
