@@ -390,55 +390,59 @@ pub struct PluginInstance {
 }
 
 impl PluginInstance {
+    #[must_use]
     pub fn metadata(&self) -> &PluginMetadata {
         &self.metadata
     }
 
+    #[must_use]
     pub fn hooks(&self) -> &PluginHooks {
         &self.hooks
     }
 
+    #[must_use]
     pub fn lifecycle(&self) -> &PluginLifecycle {
         &self.lifecycle
     }
 
+    #[must_use]
     pub fn tools(&self) -> &[PluginTool] {
         &self.tools
     }
 
     pub fn validate(&self) -> Result<(), PluginError> {
-        if self.metadata.kind != PluginKind::Builtin {
+        if self.metadata.kind == PluginKind::Builtin {
+            Ok(())
+        } else {
             validate_hook_paths(self.metadata.root.as_deref(), &self.hooks)?;
             validate_lifecycle_paths(self.metadata.root.as_deref(), &self.lifecycle)?;
             validate_tool_paths(self.metadata.root.as_deref(), &self.tools)
-        } else {
-            Ok(())
         }
     }
 
     pub fn initialize(&self) -> Result<(), PluginError> {
-        if self.metadata.kind != PluginKind::Builtin {
+        if self.metadata.kind == PluginKind::Builtin {
+            Ok(())
+        } else {
             run_lifecycle_commands(
                 self.metadata(),
                 self.lifecycle(),
                 "init",
                 &self.lifecycle.init,
             )
-        } else {
-            Ok(())
         }
     }
 
     pub fn shutdown(&self) -> Result<(), PluginError> {
-        if self.metadata.kind != PluginKind::Builtin {
+        if self.metadata.kind == PluginKind::Builtin {
+            Ok(())
+        } else {
             run_lifecycle_commands(
                 self.metadata(),
                 self.lifecycle(),
                 "shutdown",
                 &self.lifecycle.shutdown,
             )
-        } else {
-            Ok(())
         }
     }
 }

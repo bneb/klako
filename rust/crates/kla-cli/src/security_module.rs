@@ -51,9 +51,21 @@ mod tests {
 
     #[test]
     fn test_dos_payload_length_attack() {
-        // Create an excessively long payload that should be rejected
         let massive_payload = "A".repeat(300_000); 
         let result = sanitize_and_verify(massive_payload);
         assert_eq!(result, Err(SecurityError::PayloadTooLarge));
+    }
+
+    #[test]
+    fn test_serde_untagged() {
+        let msg = r#"{"type":"StatusUpdate","role":"thinker"}"#;
+        let res = serde_json::from_str::<NotebookEvent>(msg);
+        println!("RES: {:?}", res);
+        
+        if let Ok(event) = res {
+            println!("Serialized: {:?}", serde_json::to_string(&event).unwrap());
+        } else {
+            panic!("Failed to parse!");
+        }
     }
 }

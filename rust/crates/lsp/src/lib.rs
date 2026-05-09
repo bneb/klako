@@ -41,6 +41,7 @@ mod tests {
         })
     }
 
+    #[allow(clippy::too_many_lines)]
     fn write_mock_server_script(root: &std::path::Path) -> PathBuf {
         let script_path = root.join("mock_lsp_server.py");
         fs::write(

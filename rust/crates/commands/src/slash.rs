@@ -449,7 +449,7 @@ impl SlashCommand {
                         if let Ok(amount) = amount_str.parse::<f64>() {
                             budget = Some(amount);
                             // Remove the flag and amount from the objective
-                            let flag_str = format!("--budget {}", amount_str);
+                            let flag_str = format!("--budget {amount_str}");
                             let new_obj = rem.replace(&flag_str, "").trim().to_string();
                             objective = if new_obj.is_empty() { None } else { Some(new_obj) };
                         }
@@ -606,7 +606,7 @@ pub fn suggest_slash_commands(input: &str, limit: usize) -> Vec<String> {
         })
         .collect::<Vec<_>>();
 
-    ranked.sort_by(|left, right| left.cmp(right));
+    ranked.sort();
     ranked.dedup_by(|left, right| left.2 == right.2);
     ranked
         .into_iter()

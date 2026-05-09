@@ -4,15 +4,17 @@ use std::time::{Duration, Instant};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 
+use schemars::JsonSchema;
+
 // ── Input types ──────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 pub(crate) struct WebFetchInput {
     pub url: String,
     pub prompt: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 pub(crate) struct WebSearchInput {
     pub query: String,
     pub allowed_domains: Option<Vec<String>>,

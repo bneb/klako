@@ -16,6 +16,15 @@ export const MapPane: React.FC = () => {
     
     const files = Object.keys(mapData);
     
+    // Optimization: Create a lookup map for faster dependency resolution
+    const fileLookup = new Map<string, string>();
+    files.forEach(f => {
+        const parts = f.split('/');
+        const baseName = parts[parts.length - 1].split('.')[0];
+        fileLookup.set(baseName, f);
+        fileLookup.set(f, f); // also map full path
+    });
+    
     files.forEach((filePath) => {
       const fileData = mapData[filePath];
       
@@ -49,12 +58,10 @@ export const MapPane: React.FC = () => {
       // Generate Edges
       if (fileData.dependencies && Array.isArray(fileData.dependencies)) {
         fileData.dependencies.forEach((dep: string) => {
-          // Attempt to find a target node that represents this dependency
-          // For rust it might be `api`, for JS it might be `./app`
-          const cleanDep = dep.replace('./', '').replace('../', '');
-          const targetNode = files.find(f => f.includes(cleanDep) && f !== filePath);
+          const cleanDep = dep.replace('./', '').replace('../', '').split('.')[0];
+          const targetNode = fileLookup.get(cleanDep) || files.find(f => f.includes(cleanDep) && f !== filePath);
           
-          if (targetNode) {
+          if (targetNode && targetNode !== filePath) {
             generatedEdges.push({
               id: `e-${filePath}-${targetNode}`,
               source: filePath,

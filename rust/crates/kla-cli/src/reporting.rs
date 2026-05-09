@@ -195,10 +195,10 @@ pub(crate) fn format_status_report(
   Session file     {}
   Config files     {} loaded · {} discovered
   Memory files     {}",
-        context.project_root.as_ref().map(|p: &PathBuf| p.file_name().unwrap().to_str().unwrap()).unwrap_or("none"),
+        context.project_root.as_ref().map_or("none", |p: &PathBuf| p.file_name().unwrap().to_str().unwrap()),
         context.git_branch.as_deref().unwrap_or("none"),
         context.cwd.display(),
-        context.session_path.as_ref().map(|p: &PathBuf| p.display().to_string()).unwrap_or("none".to_string()),
+        context.session_path.as_ref().map_or("none".to_string(), |p: &PathBuf| p.display().to_string()),
         context.loaded_config_files,
         context.discovered_config_files,
         context.memory_file_count,
@@ -311,9 +311,8 @@ pub(crate) fn render_last_tool_debug_report(session: &Session) -> Result<String,
         "Debug Tool Call
   Name             {name}
   ID               {id}
-  Input            {}
-",
-        input
+  Input            {input}
+"
     ))
 }
 
@@ -355,7 +354,7 @@ pub(crate) fn default_export_filename(session: &Session) -> String {
 
 pub(crate) fn resolve_export_path(
     requested_path: Option<&str>,
-    session: &Session,
+    session: &runtime::Session,
 ) -> Result<PathBuf, Box<dyn std::error::Error>> {
     if let Some(path) = requested_path {
         Ok(PathBuf::from(path))

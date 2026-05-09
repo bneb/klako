@@ -18,6 +18,46 @@ pub struct MessageRequest {
     pub stream: bool,
 }
 
+use runtime::{ContentBlock, ConversationMessage, MessageRole};
+
+impl From<ConversationMessage> for InputMessage {
+    fn from(msg: ConversationMessage) -> Self {
+        Self {
+            role: match msg.role {
+                MessageRole::System => "system",
+                MessageRole::User => "user",
+                MessageRole::Assistant => "assistant",
+                MessageRole::Tool => "tool",
+            }
+            .to_string(),
+            content: msg.blocks.into_iter().map(InputContentBlock::from).collect(),
+        }
+    }
+}
+
+impl From<ContentBlock> for InputContentBlock {
+    fn from(block: ContentBlock) -> Self {
+        match block {
+            ContentBlock::Text { text } => InputContentBlock::Text { text },
+            ContentBlock::ToolUse { id, name, input } => InputContentBlock::ToolUse {
+                id,
+                name,
+                input: serde_json::from_str(&input).unwrap_or_else(|_| serde_json::json!({ "raw": input })),
+            },
+            ContentBlock::ToolResult {
+                tool_use_id,
+                tool_name: _,
+                output,
+                is_error,
+            } => InputContentBlock::ToolResult {
+                tool_use_id,
+                content: vec![ToolResultContentBlock::Text { text: output }],
+                is_error,
+            },
+        }
+    }
+}
+
 impl MessageRequest {
     #[must_use]
     pub fn with_streaming(mut self) -> Self {

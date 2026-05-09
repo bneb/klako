@@ -574,7 +574,7 @@ impl McpServerConfig {
 fn read_optional_json_object(
     path: &Path,
 ) -> Result<Option<BTreeMap<String, JsonValue>>, ConfigError> {
-    let is_legacy_config = path.file_name().and_then(|name| name.to_str()) == Some(".kla.json");
+    let _is_legacy_config = path.file_name().and_then(|name| name.to_str()) == Some(".kla.json");
     let contents = match fs::read_to_string(path) {
         Ok(contents) => contents,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -773,8 +773,7 @@ fn parse_optional_agency_topology(
     let max_parse_retries = topology
         .get("max_parse_retries")
         .and_then(JsonValue::as_i64)
-        .map(|v| u32::try_from(v).unwrap_or(2))
-        .unwrap_or(2);
+        .map_or(2, |v| u32::try_from(v).unwrap_or(2));
 
     let providers_value = topology
         .get("providers")

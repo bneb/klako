@@ -1,22 +1,19 @@
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 
-use crate::compact::{
-    compact_session, estimate_session_tokens, CompactionConfig, CompactionResult,
-};
-use crate::config::RuntimeFeatureConfig;
-use crate::hooks::{HookRunResult, HookRunner};
-use crate::permissions::{PermissionOutcome, PermissionPolicy, PermissionPrompter};
-use crate::session::{ContentBlock, ConversationMessage, Session};
+use crate::compact::{CompactionConfig, CompactionResult};
+use crate::hooks::HookRunner;
+use crate::permissions::{PermissionMode, PermissionOutcome, PermissionPolicy, PermissionPrompter};
+use crate::session::{ContentBlock, ConversationMessage, MessageRole, Session};
 use crate::usage::{TokenUsage, UsageTracker};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct ApiRequest {
     pub system_prompt: Vec<String>,
     pub messages: Vec<ConversationMessage>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum AssistantEvent {
     TextDelta(String),
     ToolUse {
@@ -28,21 +25,25 @@ pub enum AssistantEvent {
     MessageStop,
 }
 
-pub trait ApiClient {
-    fn stream(&mut self, request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError>;
+#[async_trait::async_trait]
+pub trait ApiClient: Send + Sync + dyn_clone::DynClone {
+    async fn stream(&mut self, request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError>;
+    fn set_model(&mut self, model: String);
 }
 
-pub trait ToolExecutor {
-    fn execute(&mut self, tool_name: &str, input: &str) -> Result<String, ToolError>;
+dyn_clone::clone_trait_object!(ApiClient);
+
+#[async_trait::async_trait]
+pub trait ToolExecutor: Send + Sync {
+    async fn execute(&mut self, tool_name: &str, input: &str) -> Result<String, ToolError>;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct ToolError {
-    message: String,
+    pub message: String,
 }
 
 impl ToolError {
-    #[must_use]
     pub fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
@@ -58,40 +59,10 @@ impl Display for ToolError {
 
 impl std::error::Error for ToolError {}
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuntimeError {
-    message: String,
-}
-
-impl RuntimeError {
-    #[must_use]
-    pub fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
-}
-
-impl Display for RuntimeError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.message)
-    }
-}
-
-impl std::error::Error for RuntimeError {}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TurnSummary {
-    pub assistant_messages: Vec<ConversationMessage>,
-    pub tool_results: Vec<ConversationMessage>,
-    pub iterations: usize,
-    pub usage: TokenUsage,
-}
-
-pub struct ConversationRuntime<C, T> {
+pub struct ConversationRuntime<C: ApiClient, E: ToolExecutor> {
     session: Session,
     api_client: C,
-    tool_executor: T,
+    tool_executor: E,
     permission_policy: PermissionPolicy,
     system_prompt: Vec<String>,
     max_iterations: usize,
@@ -99,16 +70,11 @@ pub struct ConversationRuntime<C, T> {
     hook_runner: HookRunner,
 }
 
-impl<C, T> ConversationRuntime<C, T>
-where
-    C: ApiClient,
-    T: ToolExecutor,
-{
-    #[must_use]
+impl<C: ApiClient, E: ToolExecutor> ConversationRuntime<C, E> {
     pub fn new(
         session: Session,
         api_client: C,
-        tool_executor: T,
+        tool_executor: E,
         permission_policy: PermissionPolicy,
         system_prompt: Vec<String>,
     ) -> Self {
@@ -118,18 +84,17 @@ where
             tool_executor,
             permission_policy,
             system_prompt,
-            RuntimeFeatureConfig::default(),
+            crate::config::RuntimeFeatureConfig::default(),
         )
     }
 
-    #[must_use]
     pub fn new_with_features(
         session: Session,
         api_client: C,
-        tool_executor: T,
+        tool_executor: E,
         permission_policy: PermissionPolicy,
         system_prompt: Vec<String>,
-        feature_config: RuntimeFeatureConfig,
+        feature_config: crate::config::RuntimeFeatureConfig,
     ) -> Self {
         let usage_tracker = UsageTracker::from_session(&session);
         Self {
@@ -138,7 +103,7 @@ where
             tool_executor,
             permission_policy,
             system_prompt,
-            max_iterations: usize::MAX,
+            max_iterations: 10,
             usage_tracker,
             hook_runner: HookRunner::from_feature_config(&feature_config),
         }
@@ -150,11 +115,12 @@ where
         self
     }
 
-    pub fn run_turn(
+    pub async fn run_turn(
         &mut self,
         user_input: impl Into<String>,
         mut prompter: Option<&mut dyn PermissionPrompter>,
     ) -> Result<TurnSummary, RuntimeError> {
+        self.usage_tracker.start_turn();
         self.session
             .messages
             .push(ConversationMessage::user_text(user_input.into()));
@@ -175,7 +141,7 @@ where
                 system_prompt: self.system_prompt.clone(),
                 messages: self.session.messages.clone(),
             };
-            let events = self.api_client.stream(request)?;
+            let events = self.api_client.stream(request).await?;
             let (assistant_message, usage) = build_assistant_message(events)?;
             if let Some(usage) = usage {
                 self.usage_tracker.record(usage);
@@ -198,124 +164,159 @@ where
                 break;
             }
 
+            let mut tool_result_blocks = Vec::new();
             for (tool_use_id, tool_name, input) in pending_tool_uses {
-                let permission_outcome = if let Some(prompt) = prompter.as_mut() {
-                    self.permission_policy
-                        .authorize(&tool_name, &input, Some(*prompt))
-                } else {
-                    self.permission_policy.authorize(&tool_name, &input, None)
+                let outcome = match prompter.as_mut() {
+                    Some(p) => {
+                        self.permission_policy
+                            .authorize(&tool_name, &input, Some(&mut **p))
+                            .await
+                    }
+                    None => {
+                        self.permission_policy
+                            .authorize(&tool_name, &input, None)
+                            .await
+                    }
                 };
 
-                let result_message = match permission_outcome {
+                let result_block = match outcome {
                     PermissionOutcome::Allow => {
                         let pre_hook_result = self.hook_runner.run_pre_tool_use(&tool_name, &input);
                         if pre_hook_result.is_denied() {
-                            let deny_message = format!("PreToolUse hook denied tool `{tool_name}`");
-                            ConversationMessage::tool_result(
+                            ContentBlock::ToolResult {
                                 tool_use_id,
                                 tool_name,
-                                format_hook_message(&pre_hook_result, &deny_message),
-                                true,
-                            )
-                        } else {
-                            let (mut output, mut is_error) =
-                                match self.tool_executor.execute(&tool_name, &input) {
-                                    Ok(output) => (output, false),
-                                    Err(error) => (error.to_string(), true),
-                                };
-                            output = merge_hook_feedback(pre_hook_result.messages(), output, false);
-
-                            let post_hook_result = self
-                                .hook_runner
-                                .run_post_tool_use(&tool_name, &input, &output, is_error);
-                            if post_hook_result.is_denied() {
-                                is_error = true;
+                                output: pre_hook_result.messages().join("\n"),
+                                is_error: true,
                             }
-                            output = merge_hook_feedback(
-                                post_hook_result.messages(),
-                                output,
-                                post_hook_result.is_denied(),
-                            );
+                        } else {
+                            let output_res = self.tool_executor.execute(&tool_name, &input).await;
+                            let is_error = output_res.is_err();
+                            let output_text = match output_res {
+                                Ok(t) => t,
+                                Err(e) => e.to_string(),
+                            };
+                            
+                            let post_hook_result =
+                                self.hook_runner.run_post_tool_use(&tool_name, &input, &output_text, is_error);
+                            
+                            let mut final_output = output_text;
+                            let mut hook_messages = Vec::new();
+                            hook_messages.extend(pre_hook_result.messages().iter().cloned());
+                            hook_messages.extend(post_hook_result.messages().iter().cloned());
 
-                            ConversationMessage::tool_result(
+                            if !hook_messages.is_empty() {
+                                final_output.push_str("\n\n[Hook feedback]:\n");
+                                final_output.push_str(&hook_messages.join("\n"));
+                            }
+
+                            ContentBlock::ToolResult {
                                 tool_use_id,
                                 tool_name,
-                                output,
+                                output: final_output,
                                 is_error,
-                            )
+                            }
                         }
                     }
                     PermissionOutcome::Deny { reason } => {
-                        ConversationMessage::tool_result(tool_use_id, tool_name, reason, true)
+                        ContentBlock::ToolResult {
+                            tool_use_id,
+                            tool_name,
+                            output: reason,
+                            is_error: true,
+                        }
                     }
                 };
-                self.session.messages.push(result_message.clone());
-                tool_results.push(result_message);
+                tool_result_blocks.push(result_block);
             }
+
+            let tool_result_message = ConversationMessage {
+                role: MessageRole::Tool,
+                blocks: tool_result_blocks,
+                usage: None,
+            };
+            self.session.messages.push(tool_result_message.clone());
+            tool_results.push(tool_result_message);
         }
 
         Ok(TurnSummary {
             assistant_messages,
             tool_results,
             iterations,
-            usage: self.usage_tracker.cumulative_usage(),
+            usage: self.usage_tracker.current_turn_usage(),
         })
     }
 
-    #[must_use]
     pub fn compact(&self, config: CompactionConfig) -> CompactionResult {
-        compact_session(&self.session, config)
+        crate::compact::compact_session(&self.session, config)
     }
 
-    #[must_use]
     pub fn estimated_tokens(&self) -> usize {
-        estimate_session_tokens(&self.session)
+        crate::compact::estimate_session_tokens(&self.session)
     }
 
-    #[must_use]
+    pub fn set_model(&mut self, model: String) {
+        self.api_client.set_model(model);
+    }
+
+    pub fn set_permission_mode(&mut self, mode: PermissionMode) {
+        self.permission_policy = PermissionPolicy::new(mode);
+    }
+
+    pub fn clear_session(&mut self) {
+        self.session.messages.clear();
+        self.usage_tracker = UsageTracker::from_session(&self.session);
+    }
+
+    pub fn replace_session(&mut self, session: Session) {
+        self.session = session;
+        self.usage_tracker = UsageTracker::from_session(&self.session);
+    }
+
+    pub async fn compact_session(&mut self) -> Result<CompactionResult, String> {
+        let result = crate::compact::compact_session(&self.session, CompactionConfig::default());
+        self.session = result.compacted_session.clone();
+        Ok(result)
+    }
+
     pub fn usage(&self) -> &UsageTracker {
         &self.usage_tracker
     }
 
-    #[must_use]
     pub fn session(&self) -> &Session {
         &self.session
     }
+}
 
-    #[must_use]
-    pub fn into_session(self) -> Session {
-        self.session
-    }
+pub struct TurnSummary {
+    pub assistant_messages: Vec<ConversationMessage>,
+    pub tool_results: Vec<ConversationMessage>,
+    pub iterations: usize,
+    pub usage: TokenUsage,
 }
 
 fn build_assistant_message(
     events: Vec<AssistantEvent>,
 ) -> Result<(ConversationMessage, Option<TokenUsage>), RuntimeError> {
-    let mut text = String::new();
     let mut blocks = Vec::new();
-    let mut finished = false;
     let mut usage = None;
-
     for event in events {
         match event {
-            AssistantEvent::TextDelta(delta) => text.push_str(&delta),
+            AssistantEvent::TextDelta(text) => {
+                if let Some(ContentBlock::Text { text: existing }) = blocks.last_mut() {
+                    existing.push_str(&text);
+                } else {
+                    blocks.push(ContentBlock::Text { text });
+                }
+            }
             AssistantEvent::ToolUse { id, name, input } => {
-                flush_text_block(&mut text, &mut blocks);
                 blocks.push(ContentBlock::ToolUse { id, name, input });
             }
-            AssistantEvent::Usage(value) => usage = Some(value),
-            AssistantEvent::MessageStop => {
-                finished = true;
+            AssistantEvent::Usage(u) => {
+                usage = Some(u);
             }
+            AssistantEvent::MessageStop => {}
         }
-    }
-
-    flush_text_block(&mut text, &mut blocks);
-
-    if !finished {
-        return Err(RuntimeError::new(
-            "assistant stream ended without a message stop event",
-        ));
     }
     if blocks.is_empty() {
         return Err(RuntimeError::new("assistant stream produced no content"));
@@ -327,78 +328,69 @@ fn build_assistant_message(
     ))
 }
 
-fn flush_text_block(text: &mut String, blocks: &mut Vec<ContentBlock>) {
-    if !text.is_empty() {
-        blocks.push(ContentBlock::Text {
-            text: std::mem::take(text),
-        });
-    }
-}
-
-fn format_hook_message(result: &HookRunResult, fallback: &str) -> String {
-    if result.messages().is_empty() {
-        fallback.to_string()
-    } else {
-        result.messages().join("\n")
-    }
-}
-
-fn merge_hook_feedback(messages: &[String], output: String, denied: bool) -> String {
-    if messages.is_empty() {
-        return output;
-    }
-
-    let mut sections = Vec::new();
-    if !output.trim().is_empty() {
-        sections.push(output);
-    }
-    let label = if denied {
-        "Hook feedback (denied)"
-    } else {
-        "Hook feedback"
-    };
-    sections.push(format!("{label}:\n{}", messages.join("\n")));
-    sections.join("\n\n")
-}
-
-type ToolHandler = Box<dyn FnMut(&str) -> Result<String, ToolError>>;
-
-#[derive(Default)]
 pub struct StaticToolExecutor {
-    handlers: BTreeMap<String, ToolHandler>,
+    tools: BTreeMap<String, Box<dyn Fn(&str) -> Result<String, String> + Send + Sync>>,
+}
+
+impl Default for StaticToolExecutor {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl StaticToolExecutor {
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            tools: BTreeMap::new(),
+        }
     }
 
     #[must_use]
-    pub fn register(
-        mut self,
-        tool_name: impl Into<String>,
-        handler: impl FnMut(&str) -> Result<String, ToolError> + 'static,
-    ) -> Self {
-        self.handlers.insert(tool_name.into(), Box::new(handler));
+    pub fn register<F>(mut self, name: impl Into<String>, f: F) -> Self
+    where
+        F: Fn(&str) -> Result<String, String> + Send + Sync + 'static,
+    {
+        self.tools.insert(name.into(), Box::new(f));
         self
     }
 }
 
+#[async_trait::async_trait]
 impl ToolExecutor for StaticToolExecutor {
-    fn execute(&mut self, tool_name: &str, input: &str) -> Result<String, ToolError> {
-        self.handlers
-            .get_mut(tool_name)
-            .ok_or_else(|| ToolError::new(format!("unknown tool: {tool_name}")))?(input)
+    async fn execute(&mut self, tool_name: &str, input: &str) -> Result<String, ToolError> {
+        let tool = self
+            .tools
+            .get(tool_name)
+            .ok_or_else(|| ToolError::new(format!("static tool `{tool_name}` not found")))?;
+        tool(input).map_err(ToolError::new)
     }
 }
 
+#[derive(Debug)]
+pub struct RuntimeError {
+    pub message: String,
+}
+
+impl RuntimeError {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+impl Display for RuntimeError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for RuntimeError {}
+
 #[cfg(test)]
 mod tests {
-    use super::{
-        ApiClient, ApiRequest, AssistantEvent, ConversationRuntime, RuntimeError,
-        StaticToolExecutor,
-    };
+    use super::*;
     use crate::compact::CompactionConfig;
     use crate::config::{RuntimeFeatureConfig, RuntimeHookConfig};
     use crate::permissions::{
@@ -410,12 +402,14 @@ mod tests {
     use crate::usage::TokenUsage;
     use std::path::PathBuf;
 
+    #[derive(Clone)]
     struct ScriptedApiClient {
         call_count: usize,
     }
 
+    #[async_trait::async_trait]
     impl ApiClient for ScriptedApiClient {
-        fn stream(&mut self, request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
+        async fn stream(&mut self, request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
             self.call_count += 1;
             match self.call_count {
                 1 => {
@@ -459,21 +453,25 @@ mod tests {
                 _ => Err(RuntimeError::new("unexpected extra API call")),
             }
         }
+        
+        fn set_model(&mut self, _model: String) {}
     }
 
     struct PromptAllowOnce;
 
+    #[async_trait::async_trait]
     impl PermissionPrompter for PromptAllowOnce {
-        fn decide(&mut self, request: &PermissionRequest) -> PermissionPromptDecision {
+        async fn decide(&mut self, request: &PermissionRequest) -> PermissionPromptDecision {
             assert_eq!(request.tool_name, "add");
             PermissionPromptDecision::Allow
         }
     }
 
-    #[test]
-    fn runs_user_to_tool_to_result_loop_end_to_end_and_tracks_usage() {
+    #[tokio::test]
+    async fn runs_user_to_tool_to_result_loop_end_to_end_and_tracks_usage() {
         let api_client = ScriptedApiClient { call_count: 0 };
-        let tool_executor = StaticToolExecutor::new().register("add", |input| {
+        let mut tool_executor = StaticToolExecutor::new();
+        tool_executor = tool_executor.register("add", |input| {
             let total = input
                 .split(',')
                 .map(|part| part.parse::<i32>().expect("input must be valid integer"))
@@ -501,6 +499,7 @@ mod tests {
 
         let summary = runtime
             .run_turn("what is 2 + 2?", Some(&mut PromptAllowOnce))
+            .await
             .expect("conversation loop should succeed");
 
         assert_eq!(summary.iterations, 2);
@@ -521,20 +520,23 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn records_denied_tool_results_when_prompt_rejects() {
+    #[tokio::test]
+    async fn records_denied_tool_results_when_prompt_rejects() {
         struct RejectPrompter;
+        #[async_trait::async_trait]
         impl PermissionPrompter for RejectPrompter {
-            fn decide(&mut self, _request: &PermissionRequest) -> PermissionPromptDecision {
+            async fn decide(&mut self, _request: &PermissionRequest) -> PermissionPromptDecision {
                 PermissionPromptDecision::Deny {
                     reason: "not now".to_string(),
                 }
             }
         }
 
+        #[derive(Clone)]
         struct SingleCallApiClient;
+        #[async_trait::async_trait]
         impl ApiClient for SingleCallApiClient {
-            fn stream(&mut self, request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
+            async fn stream(&mut self, request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
                 if request
                     .messages
                     .iter()
@@ -554,6 +556,7 @@ mod tests {
                     AssistantEvent::MessageStop,
                 ])
             }
+            fn set_model(&mut self, _model: String) {}
         }
 
         let mut runtime = ConversationRuntime::new(
@@ -566,6 +569,7 @@ mod tests {
 
         let summary = runtime
             .run_turn("use the tool", Some(&mut RejectPrompter))
+            .await
             .expect("conversation should continue after denied tool");
 
         assert_eq!(summary.tool_results.len(), 1);
@@ -575,11 +579,13 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn denies_tool_use_when_pre_tool_hook_blocks() {
+    #[tokio::test]
+    async fn denies_tool_use_when_pre_tool_hook_blocks() {
+        #[derive(Clone)]
         struct SingleCallApiClient;
+        #[async_trait::async_trait]
         impl ApiClient for SingleCallApiClient {
-            fn stream(&mut self, request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
+            async fn stream(&mut self, request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
                 if request
                     .messages
                     .iter()
@@ -599,6 +605,7 @@ mod tests {
                     AssistantEvent::MessageStop,
                 ])
             }
+            fn set_model(&mut self, _model: String) {}
         }
 
         let mut runtime = ConversationRuntime::new_with_features(
@@ -617,6 +624,7 @@ mod tests {
 
         let summary = runtime
             .run_turn("use the tool", None)
+            .await
             .expect("conversation should continue after hook denial");
 
         assert_eq!(summary.tool_results.len(), 1);
@@ -627,7 +635,7 @@ mod tests {
             panic!("expected tool result block");
         };
         assert!(
-            *is_error,
+            is_error,
             "hook denial should produce an error result: {output}"
         );
         assert!(
@@ -636,14 +644,16 @@ mod tests {
         );
     }
 
-    #[test]
-    fn appends_post_tool_hook_feedback_to_tool_result() {
+    #[tokio::test]
+    async fn appends_post_tool_hook_feedback_to_tool_result() {
+        #[derive(Clone)]
         struct TwoCallApiClient {
             calls: usize,
         }
 
+        #[async_trait::async_trait]
         impl ApiClient for TwoCallApiClient {
-            fn stream(&mut self, request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
+            async fn stream(&mut self, request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
                 self.calls += 1;
                 match self.calls {
                     1 => Ok(vec![
@@ -667,6 +677,7 @@ mod tests {
                     _ => Err(RuntimeError::new("unexpected extra API call")),
                 }
             }
+            fn set_model(&mut self, _model: String) {}
         }
 
         let mut runtime = ConversationRuntime::new_with_features(
@@ -683,6 +694,7 @@ mod tests {
 
         let summary = runtime
             .run_turn("use add", None)
+            .await
             .expect("tool loop succeeds");
 
         assert_eq!(summary.tool_results.len(), 1);
@@ -693,7 +705,7 @@ mod tests {
             panic!("expected tool result block");
         };
         assert!(
-            !*is_error,
+            !is_error,
             "post hook should preserve non-error result: {output:?}"
         );
         assert!(
@@ -710,11 +722,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn reconstructs_usage_tracker_from_restored_session() {
+    #[tokio::test]
+    async fn reconstructs_usage_tracker_from_restored_session() {
+        #[derive(Clone)]
         struct SimpleApi;
+        #[async_trait::async_trait]
         impl ApiClient for SimpleApi {
-            fn stream(
+            async fn stream(
                 &mut self,
                 _request: ApiRequest,
             ) -> Result<Vec<AssistantEvent>, RuntimeError> {
@@ -723,6 +737,7 @@ mod tests {
                     AssistantEvent::MessageStop,
                 ])
             }
+            fn set_model(&mut self, _model: String) {}
         }
 
         let mut session = Session::new();
@@ -748,15 +763,17 @@ mod tests {
             vec!["system".to_string()],
         );
 
-        assert_eq!(runtime.usage().turns(), 1);
+        assert_eq!(runtime.usage().iterations(), 1);
         assert_eq!(runtime.usage().cumulative_usage().total_tokens(), 21);
     }
 
-    #[test]
-    fn compacts_session_after_turns() {
+    #[tokio::test]
+    async fn compacts_session_after_turns() {
+        #[derive(Clone)]
         struct SimpleApi;
+        #[async_trait::async_trait]
         impl ApiClient for SimpleApi {
-            fn stream(
+            async fn stream(
                 &mut self,
                 _request: ApiRequest,
             ) -> Result<Vec<AssistantEvent>, RuntimeError> {
@@ -765,6 +782,7 @@ mod tests {
                     AssistantEvent::MessageStop,
                 ])
             }
+            fn set_model(&mut self, _model: String) {}
         }
 
         let mut runtime = ConversationRuntime::new(
@@ -774,9 +792,9 @@ mod tests {
             PermissionPolicy::new(PermissionMode::DangerFullAccess),
             vec!["system".to_string()],
         );
-        runtime.run_turn("a", None).expect("turn a");
-        runtime.run_turn("b", None).expect("turn b");
-        runtime.run_turn("c", None).expect("turn c");
+        runtime.run_turn("a", None).await.expect("turn a");
+        runtime.run_turn("b", None).await.expect("turn b");
+        runtime.run_turn("c", None).await.expect("turn c");
 
         let result = runtime.compact(CompactionConfig {
             preserve_recent_messages: 2,

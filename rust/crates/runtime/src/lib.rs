@@ -1,3 +1,5 @@
+pub mod index;
+pub mod axiom;
 mod bash;
 mod bootstrap;
 mod compact;
@@ -37,7 +39,7 @@ pub use conversation::{
     ToolError, ToolExecutor, TurnSummary,
 };
 pub use file_ops::{
-    edit_file, glob_search, grep_search, read_file, write_file, EditFileOutput, GlobSearchOutput,
+    edit_file, glob_search, grep_search, read_file, write_file, EditFileInput, EditFileOutput, GlobSearchOutput,
     GrepSearchInput, GrepSearchOutput, ReadFileOutput, StructuredPatchHunk, TextFilePayload,
     WriteFileOutput,
 };

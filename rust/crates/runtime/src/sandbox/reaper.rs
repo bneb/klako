@@ -26,6 +26,15 @@ impl SandboxGuard {
         })
     }
 
+    #[must_use] 
+    pub fn pgid(&self) -> Option<i32> {
+        self.pgid
+    }
+
+    pub fn child_mut(&mut self) -> Option<&mut Child> {
+        self.child.as_mut()
+    }
+
     /// Exposes the inner wait method allowing full async buffers while maintaining Drop constraints.
     pub async fn wait_with_output(mut self) -> std::io::Result<std::process::Output> {
         let child = self.child.take().expect("Child already consumed");

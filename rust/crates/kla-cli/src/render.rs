@@ -278,7 +278,7 @@ impl TerminalRenderer {
                 if line.is_empty() {
                     " \x1b[38;5;238m│\x1b[0m".to_string()
                 } else {
-                    format!(" \x1b[38;5;238m│\x1b[0m   {}", line)
+                    format!(" \x1b[38;5;238m│\x1b[0m   {line}")
                 }
             })
             .collect::<Vec<_>>()

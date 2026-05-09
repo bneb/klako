@@ -5,6 +5,7 @@ use crate::types::{InputContentBlock, InputMessage, ToolResultContentBlock};
 /// Uses standard BPE heuristic distributions:
 /// - English standard approximation: ~4 characters per token (ratio: 0.25)
 /// - Safety Buffer factor: 1.15 to prevent context truncation with highly symbolic code (JSON/bash grids)
+#[must_use] 
 pub fn estimate_tokens(messages: &[InputMessage]) -> usize {
     let mut total_tokens = 0.0;
 

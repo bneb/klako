@@ -23,7 +23,7 @@ use crate::types::{MessageRequest, StreamEvent};
 ///
 /// This operates at the semantic routing level—"send this conversation state
 /// somewhere and get events back"—not at the HTTP transport level.
-pub trait InferenceProvider: Send + Sync {
+pub trait InferenceProvider: Send + Sync + dyn_clone::DynClone {
     fn stream_inference<'a>(
         &'a self,
         request: &'a MessageRequest,
@@ -32,15 +32,18 @@ pub trait InferenceProvider: Send + Sync {
     fn provider_label(&self) -> &str;
 }
 
+dyn_clone::clone_trait_object!(InferenceProvider);
+
 // ---------------------------------------------------------------------------
 // OpenAiCompatInferenceProvider adapter
 // ---------------------------------------------------------------------------
 
 /// Wraps the existing `OpenAiCompatClient` to implement `InferenceProvider`.
 ///
-/// Powers both local llama_cpp endpoints (which expose OpenAI-compatible
+/// Powers both local `llama_cpp` endpoints (which expose OpenAI-compatible
 /// `/v1/chat/completions`) and cloud Gemini endpoints (which also use
 /// the OpenAI-compat surface).
+#[derive(Clone)]
 pub struct OpenAiCompatInferenceProvider {
     client: OpenAiCompatClient,
     label: String,
@@ -74,7 +77,7 @@ impl InferenceProvider for OpenAiCompatInferenceProvider {
         } else if self.engine_name == "llama_cpp" {
             // ATLAS Feature Port: Automatically inject `force_json_schema` GBNF constraint 
             // for local `llama_cpp` models so they are structurally bound to proper JSON format.
-            if let Some(_) = &specialized_request.tools {
+            if specialized_request.tools.is_some() {
                 let schema = serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -201,6 +204,60 @@ pub fn get_normalized_tool_name(raw_name: &str) -> Result<String, String> {
     }
 }
 
+struct JsonScanner<'a> {
+    text: &'a str,
+    pos: usize,
+}
+
+impl<'a> JsonScanner<'a> {
+    fn new(text: &'a str) -> Self {
+        Self { text, pos: 0 }
+    }
+
+    fn find_next_brace_block(&mut self) -> Option<(usize, usize)> {
+        while let Some(start_offset) = self.text[self.pos..].find('{') {
+            let absolute_start = self.pos + start_offset;
+            let mut brace_level = 0;
+            let mut in_string = false;
+            let mut is_escaped = false;
+
+            let mut char_indices = self.text[absolute_start..].char_indices();
+            for (offset, c) in char_indices {
+                if in_string {
+                    if is_escaped {
+                        is_escaped = false;
+                    } else if c == '\\' {
+                        is_escaped = true;
+                    } else if c == '"' {
+                        in_string = false;
+                    }
+                    continue;
+                }
+
+                match c {
+                    '"' => {
+                        in_string = true;
+                        is_escaped = false;
+                    }
+                    '{' => brace_level += 1,
+                    '}' => {
+                        brace_level -= 1;
+                        if brace_level == 0 {
+                            let absolute_end = absolute_start + offset;
+                            self.pos = absolute_end + 1;
+                            return Some((absolute_start, absolute_end));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            // If we didn't find a matching '}', advance past this '{' and try again
+            self.pos = absolute_start + 1;
+        }
+        None
+    }
+}
+
 pub fn normalize_json_tool_calls(events: &mut Vec<StreamEvent>) {
     let mut i = 0;
     while i < events.len() {
@@ -223,17 +280,16 @@ pub fn normalize_json_tool_calls(events: &mut Vec<StreamEvent>) {
                         block_indices.push(j);
                         break;
                     }
-                    _ => {} // Interleaved events for other blocks or global events
+                    _ => {}
                 }
                 j += 1;
             }
 
             if found_stop {
-                let mut current_pos = 0;
-                let mut last_narrative_pos = 0;
                 let mut new_events = Vec::new();
                 let mut next_block_index = *index;
                 let mut tools_found = 0;
+                let mut last_narrative_pos = 0;
                 
                 let text_to_scan = full_text.as_str();
 
@@ -244,130 +300,62 @@ pub fn normalize_json_tool_calls(events: &mut Vec<StreamEvent>) {
                         let thinking = &text_to_scan[start_tag..total_len];
                         push_normalized_text_block(&mut new_events, thinking, next_block_index);
                         next_block_index += 1;
-                        current_pos = total_len;
                         last_narrative_pos = total_len;
-                    } else {
-                        // Partial think? Take it all for now
-                        push_normalized_text_block(&mut new_events, text_to_scan, next_block_index);
-                        current_pos = text_to_scan.len();
-                        last_narrative_pos = current_pos;
                     }
                 }
 
-                // 2. Iteratively scan for JSON-like blocks
-                while current_pos < text_to_scan.len() {
-                    let remaining = &text_to_scan[current_pos..];
-                    if let Some(brace_start) = remaining.find('{') {
-                        let absolute_start = current_pos + brace_start;
-                        
-                        let mut brace_level = 0;
-                        let mut absolute_end = None;
-                        let mut in_string = false;
-                        let mut is_escaped = false;
-                        
-                        // We need a char iterator to handle multi-byte chars correctly
-                        let mut char_indices = text_to_scan[absolute_start..].char_indices();
-                        while let Some((offset, c)) = char_indices.next() {
-                            if !in_string {
-                                if c == '"' {
-                                    in_string = true;
-                                    is_escaped = false;
-                                } else if c == '{' {
-                                    brace_level += 1;
-                                } else if c == '}' {
-                                    brace_level -= 1;
-                                    if brace_level == 0 {
-                                        absolute_end = Some(absolute_start + offset);
-                                        break;
-                                    }
-                                }
-                            } else {
-                                if is_escaped {
-                                    is_escaped = false;
-                                } else if c == '\\' {
-                                    is_escaped = true;
-                                } else if c == '"' {
-                                    in_string = false;
-                                } else {
-                                    is_escaped = false;
-                                }
-                            }
-                        }
+                let mut scanner = JsonScanner::new(text_to_scan);
+                scanner.pos = last_narrative_pos;
 
-                        if let Some(end_idx) = absolute_end {
-                            let candidate_json = &text_to_scan[absolute_start..=end_idx];
-                            
-                            // Normalize smart quotes
-                            let json_normalized = candidate_json
-                                .replace('\u{201C}', "\"")
-                                .replace('\u{201D}', "\"")
-                                .replace('\u{2018}', "'")
-                                .replace('\u{2019}', "'");
+                while let Some((start, end)) = scanner.find_next_brace_block() {
+                    let candidate_json = &text_to_scan[start..=end];
+                    let json_normalized = candidate_json
+                        .replace(['\u{201C}', '\u{201D}'], "\"")
+                        .replace(['\u{2018}', '\u{2019}'], "'");
 
-                            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json_normalized) {
-                                if let Some(obj) = parsed.as_object() {
-                                    if obj.contains_key("name") && obj.contains_key("arguments") {
-                                        // Found a tool call!
-                                        
-                                        // First, emit any narrative text BEFORE this tool
-                                        let narrative_before = text_to_scan[last_narrative_pos..absolute_start].trim();
-                                        if !narrative_before.is_empty() {
-                                            // Optional: Strip markdown fences if they are alone at the end
-                                            let mut cleaned = narrative_before;
-                                            if let Some(s) = cleaned.strip_suffix("```json") { cleaned = s; }
-                                            if let Some(s) = cleaned.strip_suffix("```") { cleaned = s; }
-                                            cleaned = cleaned.trim();
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json_normalized) {
+                        if let Some(obj) = parsed.as_object() {
+                            if obj.contains_key("name") && obj.contains_key("arguments") {
+                                // First, emit any narrative text BEFORE this tool
+                                let narrative_before = text_to_scan[last_narrative_pos..start].trim();
+                                if !narrative_before.is_empty() {
+                                    let mut cleaned = narrative_before;
+                                    if let Some(s) = cleaned.strip_suffix("```json") { cleaned = s; }
+                                    if let Some(s) = cleaned.strip_suffix("```") { cleaned = s; }
+                                    cleaned = cleaned.trim();
 
-                                            if !cleaned.is_empty() {
-                                                push_normalized_text_block(&mut new_events, cleaned, next_block_index);
-                                                next_block_index += 1;
-                                            }
-                                        }
-
-                                        // Emit the Tool Use
-                                        let raw_tool_name = obj.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                                        
-                                        let tool_name = get_normalized_tool_name(raw_tool_name)
-                                            .unwrap_or_else(|_| raw_tool_name.to_string());
-
-                                        let arguments = obj.get("arguments").unwrap().clone();
-
-                                        new_events.push(StreamEvent::ContentBlockStart(crate::types::ContentBlockStartEvent {
-                                            index: next_block_index,
-                                            content_block: crate::types::OutputContentBlock::ToolUse {
-                                                id: format!("call_json_upcast_{}_{}", *index, tools_found),
-                                                name: tool_name,
-                                                input: arguments,
-                                            }
-                                        }));
-
-                                        new_events.push(StreamEvent::ContentBlockStop(crate::types::ContentBlockStopEvent { index: next_block_index }));
-                                        
+                                    if !cleaned.is_empty() {
+                                        push_normalized_text_block(&mut new_events, cleaned, next_block_index);
                                         next_block_index += 1;
-                                        tools_found += 1;
-                                        
-                                        // Advance cursors
-                                        current_pos = end_idx + 1;
-                                        last_narrative_pos = current_pos;
-                                        continue;
                                     }
                                 }
+
+                                // Emit the Tool Use
+                                let raw_tool_name = obj.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                                let tool_name = get_normalized_tool_name(raw_tool_name)
+                                    .unwrap_or_else(|_| raw_tool_name.to_string());
+                                let arguments = obj.get("arguments").unwrap().clone();
+
+                                new_events.push(StreamEvent::ContentBlockStart(crate::types::ContentBlockStartEvent {
+                                    index: next_block_index,
+                                    content_block: crate::types::OutputContentBlock::ToolUse {
+                                        id: format!("call_json_upcast_{}_{}", *index, tools_found),
+                                        name: tool_name,
+                                        input: arguments,
+                                    }
+                                }));
+                                new_events.push(StreamEvent::ContentBlockStop(crate::types::ContentBlockStopEvent { index: next_block_index }));
+                                
+                                next_block_index += 1;
+                                tools_found += 1;
+                                last_narrative_pos = end + 1;
                             }
-                            // Not a tool? Advance past '{' and keep looking
-                            current_pos = absolute_start + 1;
-                        } else {
-                            // Unmatched '{'
-                            current_pos = absolute_start + 1;
                         }
-                    } else {
-                        // No more '{'
-                        break;
                     }
                 }
 
-                // 3. Emit final narrative
+                // Emit final narrative
                 let final_narrative = text_to_scan[last_narrative_pos..].trim();
-                // Strip trailing markdown fence if present
                 let mut cleaned_final = final_narrative;
                 if let Some(s) = cleaned_final.strip_prefix("```") { cleaned_final = s; }
                 if let Some(s) = cleaned_final.strip_suffix("```") { cleaned_final = s; }
@@ -379,19 +367,13 @@ pub fn normalize_json_tool_calls(events: &mut Vec<StreamEvent>) {
 
                 if tools_found > 0 {
                     let new_events_count = new_events.len();
-                    // println!("DEBUG: tools_found={}, new_events_count={}", tools_found, new_events_count);
-                    
-                    // Remove original events
                     block_indices.sort_unstable_by(|a, b| b.cmp(a));
                     for idx in block_indices {
                         events.remove(idx);
                     }
-                    
-                    // Insert new events
                     for (offset, evt) in new_events.into_iter().enumerate() {
                         events.insert(start_pos + offset, evt);
                     }
-                    
                     i = start_pos + new_events_count;
                     continue;
                 }
@@ -406,6 +388,7 @@ pub fn normalize_json_tool_calls(events: &mut Vec<StreamEvent>) {
 // ---------------------------------------------------------------------------
 
 /// Role-based L0 dispatch + sequential escalation chain.
+#[derive(Clone)]
 pub struct Router {
     thinker: Box<dyn InferenceProvider>,
     typist: Box<dyn InferenceProvider>,
@@ -416,6 +399,7 @@ pub struct Router {
 }
 
 impl Router {
+    #[must_use] 
     pub fn new(
         thinker: Box<dyn InferenceProvider>,
         typist: Box<dyn InferenceProvider>,
@@ -682,546 +666,5 @@ fn gemini_base_url_for_model(_model: &str) -> String {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::BTreeMap;
-    use crate::types::{StreamEvent, ContentBlockStartEvent, ContentBlockDeltaEvent, ContentBlockStopEvent, OutputContentBlock, ContentBlockDelta, MessageDeltaEvent, MessageDelta, Usage};
-
-    #[test]
-    fn test_get_normalized_tool_name() {
-        // Supported variations
-        assert_eq!(get_normalized_tool_name("WriteFile").unwrap(), "write_file");
-        assert_eq!(get_normalized_tool_name("write_file").unwrap(), "write_file");
-        assert_eq!(get_normalized_tool_name("WRITE-FILE").unwrap(), "write_file");
-        assert_eq!(get_normalized_tool_name("WebSearch").unwrap(), "WebSearch");
-        assert_eq!(get_normalized_tool_name("web_search").unwrap(), "WebSearch");
-        assert_eq!(get_normalized_tool_name("Skill").unwrap(), "Skill");
-
-        // Unsupported cases return error
-        assert!(get_normalized_tool_name("UnknownTool123").is_err());
-        assert_eq!(
-            get_normalized_tool_name("NotATool").unwrap_err(),
-            "unsupported tool: NotATool"
-        );
-    }
-
-    struct MockProvider {
-        label: String,
-        fail_count: std::sync::atomic::AtomicU32,
-        max_failures: u32,
-    }
-
-    impl MockProvider {
-        fn always_succeed(label: &str) -> Self {
-            Self {
-                label: label.to_string(),
-                fail_count: std::sync::atomic::AtomicU32::new(0),
-                max_failures: 0,
-            }
-        }
-
-        fn fail_n_then_succeed(label: &str, n: u32) -> Self {
-            Self {
-                label: label.to_string(),
-                fail_count: std::sync::atomic::AtomicU32::new(0),
-                max_failures: n,
-            }
-        }
-
-        fn always_fail(label: &str) -> Self {
-            Self {
-                label: label.to_string(),
-                fail_count: std::sync::atomic::AtomicU32::new(0),
-                max_failures: u32::MAX,
-            }
-        }
-    }
-
-    struct MockRefusingProvider {
-        label: String,
-        refusal_message: String,
-    }
-
-    impl InferenceProvider for MockRefusingProvider {
-        fn stream_inference<'a>(
-            &'a self,
-            _request: &'a MessageRequest,
-        ) -> Pin<Box<dyn Future<Output = Result<Vec<StreamEvent>, ApiError>> + Send + 'a>>
-        {
-            let refusal = self.refusal_message.clone();
-            Box::pin(async move { Err(ApiError::ProviderRefusal(refusal)) })
-        }
-
-        fn provider_label(&self) -> &str {
-            &self.label
-        }
-    }
-
-    impl InferenceProvider for MockProvider {
-        fn stream_inference<'a>(
-            &'a self,
-            _request: &'a MessageRequest,
-        ) -> Pin<Box<dyn Future<Output = Result<Vec<StreamEvent>, ApiError>> + Send + 'a>>
-        {
-            let current = self
-                .fail_count
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            if current < self.max_failures {
-                Box::pin(async move {
-                    Err(ApiError::InvalidSseFrame("mock parse failure"))
-                })
-            } else {
-                Box::pin(async move { Ok(Vec::new()) })
-            }
-        }
-
-        fn provider_label(&self) -> &str {
-            &self.label
-        }
-    }
-
-    fn empty_request() -> MessageRequest {
-        MessageRequest {
-            model: "test".to_string(),
-            max_tokens: 100,
-            messages: Vec::new(),
-            system: None,
-            tools: None,
-            tool_choice: None,
-            force_json_schema: None,
-            stream: false,
-        }
-    }
-
-    #[tokio::test]
-    async fn routes_to_thinker_by_default() {
-        let router = Router::new(
-            Box::new(MockProvider::always_succeed("thinker")),
-            Box::new(MockProvider::always_fail("typist")),
-            Vec::new(),
-            2,
-            HashSet::from(["bash".to_string()]),
-            None,
-        );
-        let result = router
-            .stream_with_escalation(&empty_request())
-            .await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn routes_to_typist_for_bash_tool() {
-        use crate::types::ToolDefinition;
-        let router = Router::new(
-            Box::new(MockProvider::always_fail("thinker")),
-            Box::new(MockProvider::always_succeed("typist")),
-            Vec::new(),
-            2,
-            HashSet::from(["bash".to_string()]),
-            None,
-        );
-        let mut request = empty_request();
-        request.tools = Some(vec![ToolDefinition {
-            name: "bash".to_string(),
-            description: Some("run shell".to_string()),
-            input_schema: serde_json::json!({}),
-        }]);
-        let result = router.stream_with_escalation(&request).await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn escalates_to_l1_on_parse_failure() {
-        let router = Router::new(
-            Box::new(MockProvider::always_fail("thinker")),
-            Box::new(MockProvider::always_fail("typist")),
-            vec![Box::new(MockProvider::always_succeed("L1"))],
-            2,
-            HashSet::new(),
-            None,
-        );
-        let result = router
-            .stream_with_escalation(&empty_request())
-            .await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn escalates_through_full_chain() {
-        let router = Router::new(
-            Box::new(MockProvider::always_fail("thinker")),
-            Box::new(MockProvider::always_fail("typist")),
-            vec![
-                Box::new(MockProvider::always_fail("L1")),
-                Box::new(MockProvider::always_fail("L2")),
-                Box::new(MockProvider::always_succeed("L3")),
-            ],
-            0,
-            HashSet::new(),
-            None,
-        );
-        let result = router
-            .stream_with_escalation(&empty_request())
-            .await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn returns_error_when_all_tiers_fail() {
-        let router = Router::new(
-            Box::new(MockProvider::always_fail("thinker")),
-            Box::new(MockProvider::always_fail("typist")),
-            vec![Box::new(MockProvider::always_fail("L1"))],
-            0,
-            HashSet::new(),
-            None,
-        );
-        let result = router
-            .stream_with_escalation(&empty_request())
-            .await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn retries_before_escalating() {
-        // thinker fails 2 times then succeeds on 3rd (max_parse_retries=2 gives 3 attempts)
-        let router = Router::new(
-            Box::new(MockProvider::fail_n_then_succeed("thinker", 2)),
-            Box::new(MockProvider::always_fail("typist")),
-            Vec::new(),
-            2,
-            HashSet::new(),
-            None,
-        );
-        let result = router
-            .stream_with_escalation(&empty_request())
-            .await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn escalates_on_provider_refusal() {
-        let router = Router::new(
-            Box::new(MockRefusingProvider {
-                label: "thinker".to_string(),
-                refusal_message: "I am an AI and cannot write a game".to_string(),
-            }),
-            Box::new(MockProvider::always_fail("typist")),
-            vec![Box::new(MockProvider::always_succeed("L1"))],
-            2,
-            HashSet::new(),
-            None,
-        );
-        let result = router
-            .stream_with_escalation(&empty_request())
-            .await;
-        // It should escalate successfully to L1 and return Ok
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_detect_provider_refusal() {
-        use crate::types::{ContentBlockStartEvent, OutputContentBlock, ContentBlockDeltaEvent, ContentBlockDelta};
-        
-        let events_safe_text = vec![
-            StreamEvent::ContentBlockStart(ContentBlockStartEvent { index: 0, content_block: OutputContentBlock::Text { text: "Hello! I can help.".to_string() } }),
-        ];
-        assert_eq!(detect_provider_refusal(&events_safe_text), None);
-
-        let events_refusal = vec![
-            StreamEvent::ContentBlockStart(ContentBlockStartEvent { index: 0, content_block: OutputContentBlock::Text { text: "I'm sorry, I cannot fulfill".to_string() } }),
-            StreamEvent::ContentBlockDelta(ContentBlockDeltaEvent { index: 0, delta: ContentBlockDelta::TextDelta { text: " this request".to_string() } }),
-        ];
-        assert_eq!(detect_provider_refusal(&events_refusal).unwrap(), "I'm sorry, I cannot fulfill this request");
-
-        let events_refusal_with_tool = vec![
-            StreamEvent::ContentBlockStart(ContentBlockStartEvent { index: 0, content_block: OutputContentBlock::Text { text: "I'm sorry".to_string() } }),
-            StreamEvent::ContentBlockStart(ContentBlockStartEvent { index: 1, content_block: OutputContentBlock::ToolUse { id: "1".into(), name: "test".into(), input: serde_json::json!({}) } }),
-        ];
-        // Must bypass refusal match because a tool call is present
-        assert_eq!(detect_provider_refusal(&events_refusal_with_tool), None);
-    }
-
-    #[test]
-    fn builds_router_from_valid_topology() {
-        let mut providers = BTreeMap::new();
-        providers.insert(
-            "L0_thinker".to_string(),
-            ProviderEntry {
-                engine: "llama_cpp".to_string(),
-                model: "gemma-4-E4B-it.gguf".to_string(),
-                endpoint: Some("http://localhost:8080/v1".to_string()),
-                api_env_var: None,
-                api_key: None,
-                capabilities: vec!["reasoning".to_string(), "chat".to_string()],
-                fallback_for: Vec::new(),
-                disable_tools: None,
-                skills: Vec::new(),
-            },
-        );
-        providers.insert(
-            "L0_typist".to_string(),
-            ProviderEntry {
-                engine: "llama_cpp".to_string(),
-                model: "qwen2.5-coder-7b.gguf".to_string(),
-                endpoint: Some("http://localhost:8081/v1".to_string()),
-                api_env_var: None,
-                api_key: None,
-                capabilities: vec!["bash".to_string(), "file_edit".to_string(), "WebFetch".to_string(), "WebSearch".to_string()],
-                fallback_for: Vec::new(),
-                disable_tools: None,
-                skills: Vec::new(),
-            },
-        );
-        providers.insert(
-            "L1_micro".to_string(),
-            ProviderEntry {
-                engine: "gemini".into(),
-                model: "gemini-3.1-flash-lite-preview".into(),
-                endpoint: None,
-                api_env_var: None,
-                api_key: None,
-                capabilities: Vec::new(),
-                fallback_for: vec!["L0_thinker".to_string(), "L0_typist".to_string()],
-                disable_tools: None,
-                skills: Vec::new(),
-            },
-        );
-
-        let topology = AgencyTopology {
-            default_tier: "L0".to_string(),
-            escalation_policy: runtime::EscalationPolicy::SequentialChain,
-            max_parse_retries: 2,
-            providers,
-        };
-
-        let router = build_router_from_topology(&topology);
-        assert!(router.is_ok());
-        let router = router.unwrap();
-        assert_eq!(router.tier_count(), 3); // thinker + typist + L1
-        assert!(router.typist_capabilities.contains("WebFetch"));
-        assert!(router.typist_capabilities.contains("WebSearch"));
-    }
-
-    #[tokio::test]
-    async fn provider_overrides_request_model() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let base_url = format!("http://127.0.0.1:{}", port);
-        
-        let client = OpenAiCompatClient::new(
-            "key", 
-            OpenAiCompatConfig { 
-                provider_name: "test", 
-                api_key_env: "", 
-                base_url_env: "", 
-                default_base_url: "" 
-            }
-        ).with_base_url(&base_url);
-        
-        let provider = OpenAiCompatInferenceProvider::new(client, "L0", "deepseek-r1".to_string(), "".to_string(), false);
-        
-        tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            use tokio::io::AsyncReadExt;
-            let mut buf = [0; 1024];
-            let n = socket.read(&mut buf).await.unwrap();
-            let req = String::from_utf8_lossy(&buf[..n]);
-            
-            // Assert the topological model override is properly serialized, ignoring the generalized request model.
-            assert!(req.contains("\"model\":\"deepseek-r1\""));
-            assert!(!req.contains("gemini-2.5-flash"));
-            
-            use tokio::io::AsyncWriteExt;
-            // Send back empty SSE to clear out the evaluation stream loop naturally.
-            let _ = socket.write_all(b"HTTP/1.1 200 OK\r\n\r\ndata: [DONE]\n\n").await;
-        });
-        
-        let mut request = empty_request();
-        request.model = "gemini-2.5-flash".to_string();
-        
-        let _ = provider.stream_inference(&request).await;
-    }
-
-    #[test]
-    fn normalize_json_tool_call_markdown() {
-        let mut events = vec![
-            StreamEvent::ContentBlockStart(ContentBlockStartEvent {
-                index: 0,
-                content_block: OutputContentBlock::Text { text: "".to_string() }
-            }),
-            StreamEvent::ContentBlockDelta(ContentBlockDeltaEvent {
-                index: 0,
-                delta: ContentBlockDelta::TextDelta { text: "```json\n".to_string() }
-            }),
-            StreamEvent::ContentBlockDelta(ContentBlockDeltaEvent {
-                index: 0,
-                delta: ContentBlockDelta::TextDelta { text: "{\"name\": \"WebSearch\", \"arguments\": \"{\\\"query\\\":\\\"tron\\\"}\"}\n".to_string() }
-            }),
-            StreamEvent::ContentBlockDelta(ContentBlockDeltaEvent {
-                index: 0,
-                delta: ContentBlockDelta::TextDelta { text: "```".to_string() }
-            }),
-            StreamEvent::ContentBlockStop(ContentBlockStopEvent { index: 0 }),
-        ];
-        
-        normalize_json_tool_calls(&mut events);
-        
-        // Expected blocks: 1 (ToolUse only)
-        // Total 2 events.
-        assert_eq!(events.len(), 2);
-        if let StreamEvent::ContentBlockStart(start) = &events[0] {
-            if let OutputContentBlock::ToolUse { name, .. } = &start.content_block {
-                assert_eq!(name, "WebSearch");
-            } else { panic!("Not a ToolUse block, got {:?}", start.content_block); }
-        } else { panic!("Not a ContentBlockStart"); }
-    }
-
-    #[test]
-    fn normalize_json_tool_call_raw() {
-        let mut events = vec![
-            StreamEvent::ContentBlockStart(ContentBlockStartEvent {
-                index: 0,
-                content_block: OutputContentBlock::Text { text: "{\"name\": \"WebSearch\", \"arguments\": {\"query\": \"tron\"}}".to_string() }
-            }),
-            StreamEvent::ContentBlockStop(ContentBlockStopEvent { index: 0 }),
-        ];
-        
-        normalize_json_tool_calls(&mut events);
-        
-        // 1 ToolUse = 2 events
-        assert_eq!(events.len(), 2);
-        if let StreamEvent::ContentBlockStart(start) = &events[0] {
-            if let OutputContentBlock::ToolUse { name, .. } = &start.content_block {
-                assert_eq!(name, "WebSearch");
-            } else { panic!("Not a ToolUse block: {:?}", start.content_block); }
-        }
-    }
-
-    #[test]
-    fn normalize_json_tool_call_deepseek_think() {
-        let mut events = vec![
-            StreamEvent::ContentBlockStart(ContentBlockStartEvent {
-                index: 0,
-                content_block: OutputContentBlock::Text { text: "".to_string() }
-            }),
-            StreamEvent::ContentBlockDelta(ContentBlockDeltaEvent {
-                index: 0,
-                delta: ContentBlockDelta::TextDelta { text: "<think>\nThinking about Tron...\n</think>\n\n".to_string() }
-            }),
-            StreamEvent::ContentBlockDelta(ContentBlockDeltaEvent {
-                index: 0,
-                delta: ContentBlockDelta::TextDelta { text: "{\"name\": \"WebSearch\", \"arguments\": {\"query\": \"tron\"}}".to_string() }
-            }),
-            StreamEvent::ContentBlockStop(ContentBlockStopEvent { index: 0 }),
-        ];
-        
-        normalize_json_tool_calls(&mut events);
-        
-        // Expect 2 content blocks: Text (thinking) + ToolUse
-        // index 0: Text start, Text delta (think), Text stop
-        // index 1: ToolUse start, ToolUse stop
-        assert_eq!(events.len(), 5);
-        
-        if let StreamEvent::ContentBlockDelta(delta) = &events[1] {
-            if let ContentBlockDelta::TextDelta { text } = &delta.delta {
-                assert!(text.contains("<think>"));
-            }
-        }
-        
-        if let StreamEvent::ContentBlockStart(start) = &events[3] {
-            assert_eq!(start.index, 1);
-            if let OutputContentBlock::ToolUse { name, .. } = &start.content_block {
-                assert_eq!(name, "WebSearch");
-            }
-        }
-    }
-    #[test]
-    fn normalize_json_tool_call_with_interleaved_delta() {
-        let mut events = vec![
-            StreamEvent::ContentBlockStart(ContentBlockStartEvent {
-                index: 0,
-                content_block: OutputContentBlock::Text { text: "{\"name\": \"WebSearch\", \"arguments\": {\"query\": \"tron\"}}".to_string() }
-            }),
-            StreamEvent::MessageDelta(MessageDeltaEvent {
-                delta: MessageDelta { stop_reason: None, stop_sequence: None },
-                usage: Usage { input_tokens: 10, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 20 }
-            }),
-            StreamEvent::ContentBlockStop(ContentBlockStopEvent { index: 0 }),
-        ];
-        
-        normalize_json_tool_calls(&mut events);
-        
-        // ToolUse start, Stop, AND the MessageDelta which should be kept!
-        // So 3 events total.
-        assert_eq!(events.len(), 3);
-        
-        if let StreamEvent::ContentBlockStart(start) = &events[0] {
-            if let OutputContentBlock::ToolUse { name, .. } = &start.content_block {
-                assert_eq!(name, "WebSearch");
-            } else { panic!("Not a ToolUse block, got {:?}", start.content_block); }
-        }
-    }
-
-    #[test]
-    fn normalize_json_tool_call_with_extra_text() {
-        let mut events = vec![
-            StreamEvent::ContentBlockStart(ContentBlockStartEvent {
-                index: 0,
-                content_block: OutputContentBlock::Text { text: "Sure! I will search for that: {\"name\": \"WebSearch\", \"arguments\": {\"query\": \"tron\"}} Hope this helps!".to_string() }
-            }),
-            StreamEvent::ContentBlockStop(ContentBlockStopEvent { index: 0 }),
-        ];
-        
-        normalize_json_tool_calls(&mut events);
-        
-        // Block 0: Text ("Sure! I will search for that:") (3)
-        // Block 1: ToolUse (2)
-        // Block 2: Text ("Hope this helps!") (3)
-        // Total 8 events.
-        assert_eq!(events.len(), 8);
-        
-        if let StreamEvent::ContentBlockStart(start) = &events[3] {
-            assert_eq!(start.index, 1);
-            if let OutputContentBlock::ToolUse { name, .. } = &start.content_block {
-                assert_eq!(name, "WebSearch");
-            } else { panic!("Expected ToolUse at index 1, got {:?}", start.content_block); }
-        }
-    }
-
-    #[test]
-    fn normalize_json_tool_call_multi() {
-        let mut events = vec![
-            StreamEvent::ContentBlockStart(ContentBlockStartEvent {
-                index: 0,
-                content_block: OutputContentBlock::Text { text: "Here is your plan:\n\n```json\n{\"name\": \"WebSearch\", \"arguments\": {\"query\": \"Cruis'n USA\"}}\n```\n\nAnd then:\n\n```json\n{\"name\": \"NotebookEdit\", \"arguments\": {\"notebook_path\": \"test.ipynb\", \"edit_mode\": \"replace\", \"cell_id\": \"1\", \"new_source\": \"test\"}}\n```\n\nGood luck!".to_string() }
-            }),
-            StreamEvent::ContentBlockStop(ContentBlockStopEvent { index: 0 }),
-        ];
-        
-        normalize_json_tool_calls(&mut events);
-        
-        // Expected blocks:
-        // 0: Text ("Here is your plan:") (3)
-        // 1: ToolUse (WebSearch) (2)
-        // 2: Text ("And then:") (3)
-        // 3: ToolUse (NotebookEdit) (2)
-        // 4: Text ("Good luck!") (3)
-        // Total 13 events.
-        assert_eq!(events.len(), 13);
-        
-        if let StreamEvent::ContentBlockStart(start) = &events[3] {
-            assert_eq!(start.index, 1);
-            if let OutputContentBlock::ToolUse { name, .. } = &start.content_block {
-                assert_eq!(name, "WebSearch");
-            }
-        }
-        
-        if let StreamEvent::ContentBlockStart(start) = &events[8] {
-            assert_eq!(start.index, 3);
-            if let OutputContentBlock::ToolUse { name, .. } = &start.content_block {
-                assert_eq!(name, "NotebookEdit");
-            }
-        }
-    }
-}
+include!("router_tests.rs");
+include!("normalization_tests.rs");

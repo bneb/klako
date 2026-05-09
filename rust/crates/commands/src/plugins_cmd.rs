@@ -124,6 +124,7 @@ pub fn handle_plugins_slash_command(
 
 // ── Rendering ────────────────────────────────────────────────────────
 
+#[must_use] 
 pub fn render_plugins_report(plugins: &[PluginSummary]) -> String {
     let mut lines = vec!["Plugins".to_string()];
     if plugins.is_empty() {

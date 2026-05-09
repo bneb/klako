@@ -1,14 +1,14 @@
 use serde_json::json;
 use tools::execute_tool;
 
-#[test]
-fn discovery_world_extracts_symbol_map() {
+#[tokio::test]
+async fn discovery_world_extracts_symbol_map() {
     let payload = json!({
         "operation": "get_repo_map",
         "dir_path": "/Users/kevin/projects/klako/rust/crates/tools/src/worlds"
     });
     
-    let res = execute_tool("DiscoveryWorld", &payload).expect("discovery should succeed");
+    let res = execute_tool("DiscoveryWorld", &payload).await.expect("discovery should succeed");
     let out: serde_json::Value = serde_json::from_str(&res).unwrap();
     
     // Assert that we see our files in the map

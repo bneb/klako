@@ -36,8 +36,9 @@ pub enum PermissionPromptDecision {
     Deny { reason: String },
 }
 
-pub trait PermissionPrompter {
-    fn decide(&mut self, request: &PermissionRequest) -> PermissionPromptDecision;
+#[async_trait::async_trait]
+pub trait PermissionPrompter: Send + Sync {
+    async fn decide(&mut self, request: &PermissionRequest) -> PermissionPromptDecision;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,8 +86,7 @@ impl PermissionPolicy {
             .unwrap_or(PermissionMode::DangerFullAccess)
     }
 
-    #[must_use]
-    pub fn authorize(
+    pub async fn authorize(
         &self,
         tool_name: &str,
         input: &str,
@@ -110,7 +110,7 @@ impl PermissionPolicy {
                 && required_mode == PermissionMode::DangerFullAccess)
         {
             return match prompter.as_mut() {
-                Some(prompter) => match prompter.decide(&request) {
+                Some(p) => match p.decide(&request).await {
                     PermissionPromptDecision::Allow => PermissionOutcome::Allow,
                     PermissionPromptDecision::Deny { reason } => PermissionOutcome::Deny { reason },
                 },
@@ -146,8 +146,9 @@ mod tests {
         allow: bool,
     }
 
+    #[async_trait::async_trait]
     impl PermissionPrompter for RecordingPrompter {
-        fn decide(&mut self, request: &PermissionRequest) -> PermissionPromptDecision {
+        async fn decide(&mut self, request: &PermissionRequest) -> PermissionPromptDecision {
             self.seen.push(request.clone());
             if self.allow {
                 PermissionPromptDecision::Allow
@@ -159,40 +160,40 @@ mod tests {
         }
     }
 
-    #[test]
-    fn allows_tools_when_active_mode_meets_requirement() {
+    #[tokio::test]
+    async fn allows_tools_when_active_mode_meets_requirement() {
         let policy = PermissionPolicy::new(PermissionMode::WorkspaceWrite)
             .with_tool_requirement("read_file", PermissionMode::ReadOnly)
             .with_tool_requirement("write_file", PermissionMode::WorkspaceWrite);
 
         assert_eq!(
-            policy.authorize("read_file", "{}", None),
+            policy.authorize("read_file", "{}", None).await,
             PermissionOutcome::Allow
         );
         assert_eq!(
-            policy.authorize("write_file", "{}", None),
+            policy.authorize("write_file", "{}", None).await,
             PermissionOutcome::Allow
         );
     }
 
-    #[test]
-    fn denies_read_only_escalations_without_prompt() {
+    #[tokio::test]
+    async fn denies_read_only_escalations_without_prompt() {
         let policy = PermissionPolicy::new(PermissionMode::ReadOnly)
             .with_tool_requirement("write_file", PermissionMode::WorkspaceWrite)
             .with_tool_requirement("bash", PermissionMode::DangerFullAccess);
 
         assert!(matches!(
-            policy.authorize("write_file", "{}", None),
+            policy.authorize("write_file", "{}", None).await,
             PermissionOutcome::Deny { reason } if reason.contains("requires workspace-write permission")
         ));
         assert!(matches!(
-            policy.authorize("bash", "{}", None),
+            policy.authorize("bash", "{}", None).await,
             PermissionOutcome::Deny { reason } if reason.contains("requires danger-full-access permission")
         ));
     }
 
-    #[test]
-    fn prompts_for_workspace_write_to_danger_full_access_escalation() {
+    #[tokio::test]
+    async fn prompts_for_workspace_write_to_danger_full_access_escalation() {
         let policy = PermissionPolicy::new(PermissionMode::WorkspaceWrite)
             .with_tool_requirement("bash", PermissionMode::DangerFullAccess);
         let mut prompter = RecordingPrompter {
@@ -200,7 +201,7 @@ mod tests {
             allow: true,
         };
 
-        let outcome = policy.authorize("bash", "echo hi", Some(&mut prompter));
+        let outcome = policy.authorize("bash", "echo hi", Some(&mut prompter)).await;
 
         assert_eq!(outcome, PermissionOutcome::Allow);
         assert_eq!(prompter.seen.len(), 1);
@@ -215,8 +216,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn honors_prompt_rejection_reason() {
+    #[tokio::test]
+    async fn honors_prompt_rejection_reason() {
         let policy = PermissionPolicy::new(PermissionMode::WorkspaceWrite)
             .with_tool_requirement("bash", PermissionMode::DangerFullAccess);
         let mut prompter = RecordingPrompter {
@@ -225,7 +226,7 @@ mod tests {
         };
 
         assert!(matches!(
-            policy.authorize("bash", "echo hi", Some(&mut prompter)),
+            policy.authorize("bash", "echo hi", Some(&mut prompter)).await,
             PermissionOutcome::Deny { reason } if reason == "not now"
         ));
     }

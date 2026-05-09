@@ -4,6 +4,7 @@ use crate::error::ApiError;
 use crate::router::InferenceProvider;
 use crate::types::{ContentBlockDelta, InputMessage, MessageRequest, StreamEvent};
 
+#[derive(Clone)]
 pub struct ContextManager {
     compactor_provider: Box<dyn InferenceProvider>,
     max_tokens: usize,
@@ -11,6 +12,7 @@ pub struct ContextManager {
 }
 
 impl ContextManager {
+    #[must_use] 
     pub fn new(
         compactor_provider: Box<dyn InferenceProvider>,
         max_tokens: usize,
@@ -68,8 +70,7 @@ impl ContextManager {
             }}\n\
             \n\
             HISTORY TO COMPRESS:\n\
-            {}",
-            middle_json
+            {middle_json}"
         );
 
         let mut compactor_req = MessageRequest {
@@ -110,23 +111,20 @@ impl ContextManager {
                     .unwrap_or(&output_json)
                     .trim();
 
-                match serde_json::from_str::<StateVector>(cleaned) {
-                    Ok(vector) => {
-                        compacted_vector = Some(vector);
-                        break;
-                    }
-                    Err(_) => {
-                        // Retry with fixed reminder
-                        compactor_req.messages.push(InputMessage {
-                            role: "assistant".to_string(),
-                            content: vec![crate::types::InputContentBlock::Text {
-                                text: output_json,
-                            }],
-                        });
-                        compactor_req.messages.push(InputMessage::user_text(
-                            "ERROR: Output did not match strict JSON schema. Return ONLY the JSON object.",
-                        ));
-                    }
+                if let Ok(vector) = serde_json::from_str::<StateVector>(cleaned) {
+                    compacted_vector = Some(vector);
+                    break;
+                } else {
+                    // Retry with fixed reminder
+                    compactor_req.messages.push(InputMessage {
+                        role: "assistant".to_string(),
+                        content: vec![crate::types::InputContentBlock::Text {
+                            text: output_json,
+                        }],
+                    });
+                    compactor_req.messages.push(InputMessage::user_text(
+                        "ERROR: Output did not match strict JSON schema. Return ONLY the JSON object.",
+                    ));
                 }
             }
             retries += 1;
@@ -158,6 +156,7 @@ mod tests {
     use std::future::Future;
     use std::pin::Pin;
 
+    #[derive(Clone)]
     struct MockProvider {
         label: String,
         return_events: Vec<StreamEvent>,

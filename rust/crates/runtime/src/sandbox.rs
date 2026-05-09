@@ -8,8 +8,9 @@ pub mod trytet_jail;
 pub mod b4mal;
 
 use serde::{Deserialize, Serialize};
+use schemars::JsonSchema;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum FilesystemIsolationMode {
     Off,
@@ -29,7 +30,7 @@ impl FilesystemIsolationMode {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default, JsonSchema)]
 pub struct SandboxConfig {
     pub enabled: Option<bool>,
     pub namespace_restrictions: Option<bool>,
@@ -38,7 +39,7 @@ pub struct SandboxConfig {
     pub allowed_mounts: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default, JsonSchema)]
 pub struct SandboxRequest {
     pub enabled: bool,
     pub namespace_restrictions: bool,
@@ -47,14 +48,14 @@ pub struct SandboxRequest {
     pub allowed_mounts: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default, JsonSchema)]
 pub struct ContainerEnvironment {
     pub in_container: bool,
     pub markers: Vec<String>,
 }
 
 #[allow(clippy::struct_excessive_bools)]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default, JsonSchema)]
 pub struct SandboxStatus {
     pub enabled: bool,
     pub requested: SandboxRequest,

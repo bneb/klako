@@ -47,7 +47,7 @@ pub fn find_git_root() -> Result<PathBuf, Box<dyn std::error::Error>> {
     Ok(PathBuf::from(path))
 }
 
-/// Parse `git status --short -b` output into (project_root, branch).
+/// Parse `git status --short -b` output into (`project_root`, branch).
 ///
 /// Returns `(None, None)` when `status` is `None`.
 pub fn parse_git_status_metadata(status: Option<&str>) -> (Option<PathBuf>, Option<String>) {
@@ -85,6 +85,12 @@ pub fn write_temp_text_file(
     let path = env::temp_dir().join(filename);
     fs::write(&path, contents)?;
     Ok(path)
+}
+
+/// Commit changes to the git repository.
+pub fn git_commit(title: &str, body: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let message = format!("{title}\n\n{body}");
+    git_status_ok(&["commit", "-m", &message])
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

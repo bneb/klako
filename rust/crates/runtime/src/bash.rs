@@ -18,14 +18,6 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex as TokioMutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-static BASH_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
-
-fn bash_runtime() -> &'static tokio::runtime::Runtime {
-    BASH_RUNTIME.get_or_init(|| {
-        tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap()
-    })
-}
-
 static PERSISTENT_SHELL: OnceLock<TokioMutex<Option<PersistentShell>>> = OnceLock::new();
 
 fn persistent_shell() -> &'static TokioMutex<Option<PersistentShell>> {
@@ -35,9 +27,9 @@ fn persistent_shell() -> &'static TokioMutex<Option<PersistentShell>> {
 static DELIMITER_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 fn next_delimiter() -> String {
-    let micros = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros();
+    let micros = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_micros();
     let count = DELIMITER_COUNTER.fetch_add(1, Ordering::SeqCst);
-    format!("__KLAKO_DELIM_{}_{}__", micros, count)
+    format!("__KLAKO_DELIM_{micros}_{count}__")
 }
 
 async fn read_until_delimiter(
@@ -53,7 +45,7 @@ async fn read_until_delimiter(
         if n == 0 {
             // EOF reached without delimiter
             let out = String::from_utf8_lossy(&captured_bytes).into_owned();
-            return Ok((out, "".to_string()));
+            return Ok((out, String::new()));
         }
         captured_bytes.extend_from_slice(&buf[..n]);
         
@@ -87,7 +79,7 @@ async fn read_until_delimiter(
 }
 
 pub struct PersistentShell {
-    _child: tokio::process::Child,
+    _guard: SandboxGuard,
     stdin: tokio::process::ChildStdin,
     stdout: tokio::process::ChildStdout,
     stderr: tokio::process::ChildStderr,
@@ -95,26 +87,28 @@ pub struct PersistentShell {
 
 impl PersistentShell {
     pub fn spawn() -> std::io::Result<Self> {
-        let mut child = tokio::process::Command::new("bash")
+        let mut command = tokio::process::Command::new("bash");
+        command
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()?;
+            .kill_on_drop(true);
 
-        let stdin = child.stdin.take().unwrap();
-        let stdout = child.stdout.take().unwrap();
-        let stderr = child.stderr.take().unwrap();
+        let mut guard = SandboxGuard::spawn_isolated(command)?;
+        let child = guard.child_mut().ok_or_else(|| io::Error::other("Child must exist after spawn"))?;
+        
+        let stdin = child.stdin.take().ok_or_else(|| io::Error::other("Failed to take stdin"))?;
+        let stdout = child.stdout.take().ok_or_else(|| io::Error::other("Failed to take stdout"))?;
+        let stderr = child.stderr.take().ok_or_else(|| io::Error::other("Failed to take stderr"))?;
 
-        Ok(Self { _child: child, stdin, stdout, stderr })
+        Ok(Self { _guard: guard, stdin, stdout, stderr })
     }
 
     pub async fn execute(&mut self, command: &str, timeout_ms: Option<u64>) -> std::io::Result<(String, String, Option<i32>)> {
         let out_del = next_delimiter();
         let err_del = next_delimiter();
         let payload = format!(
-            "{{ {} ; }} \n_K_ST=$?\necho \"{}:$_K_ST\"\necho \"{}:$_K_ST\" >&2\n",
-            command, out_del, err_del
+            "{{ {command} ; }} \n_K_ST=$?\necho \"{out_del}:$_K_ST\"\necho \"{err_del}:$_K_ST\" >&2\n"
         );
 
         self.stdin.write_all(payload.as_bytes()).await?;
@@ -136,21 +130,26 @@ impl PersistentShell {
         let (stdout, code_str) = out_res?;
         let (stderr, _) = err_res?;
 
-        let code = if !code_str.is_empty() {
-            code_str.parse::<i32>().ok()
-        } else {
+        let code = if code_str.is_empty() {
             // EOF hit. Check if shell exited
-            match self._child.try_wait() {
-                Ok(Some(status)) => status.code().or(Some(-1)),
-                _ => None,
+            match self._guard.child_mut() {
+                Some(child) => match child.try_wait() {
+                    Ok(Some(status)) => status.code().or(Some(-1)),
+                    _ => None,
+                },
+                None => None,
             }
+        } else {
+            code_str.parse::<i32>().ok()
         };
         
         Ok((stdout, stderr, code))
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+use schemars::JsonSchema;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct BashCommandInput {
     pub command: String,
     pub timeout: Option<u64>,
@@ -200,7 +199,7 @@ pub struct BashCommandOutput {
     pub sandbox_status: Option<SandboxStatus>,
 }
 
-pub fn execute_bash(input: BashCommandInput) -> io::Result<BashCommandOutput> {
+pub async fn execute_bash(input: BashCommandInput) -> io::Result<BashCommandOutput> {
     let cwd = env::current_dir()?;
     let sandbox_status = sandbox_status_for_input(&input, &cwd);
 
@@ -231,69 +230,67 @@ pub fn execute_bash(input: BashCommandInput) -> io::Result<BashCommandOutput> {
         });
     }
 
-    if !sandbox_status.filesystem_active {
-        return bash_runtime().block_on(async {
-            let mut guard = persistent_shell().lock().await;
-            if guard.is_none() {
-                *guard = Some(PersistentShell::spawn()?);
+    if sandbox_status.filesystem_active {
+        execute_bash_async(input, sandbox_status, cwd).await
+    } else {
+        let mut guard = persistent_shell().lock().await;
+        if guard.is_none() {
+            *guard = Some(PersistentShell::spawn()?);
+        }
+        let shell = guard.as_mut().unwrap();
+        
+        match shell.execute(&input.command, input.timeout).await {
+            Ok((stdout, stderr, code)) => {
+                let return_code_interpretation = code.and_then(|c| if c == 0 { None } else { Some(format!("exit_code:{c}")) });
+                
+                // Basic heuristic to attach pwd system note if command resembles directory change
+                let no_output_expected = Some(stdout.trim().is_empty() && stderr.trim().is_empty());
+                
+                Ok(BashCommandOutput {
+                    stdout,
+                    stderr,
+                    raw_output_path: None,
+                    interrupted: false,
+                    is_image: None,
+                    background_task_id: None,
+                    backgrounded_by_user: None,
+                    assistant_auto_backgrounded: None,
+                    dangerously_disable_sandbox: input.dangerously_disable_sandbox,
+                    return_code_interpretation,
+                    no_output_expected,
+                    structured_content: None,
+                    persisted_output_path: None,
+                    persisted_output_size: None,
+                    sandbox_status: Some(sandbox_status),
+                })
             }
-            let shell = guard.as_mut().unwrap();
-            
-            match shell.execute(&input.command, input.timeout).await {
-                Ok((stdout, stderr, code)) => {
-                    let return_code_interpretation = code.and_then(|c| if c == 0 { None } else { Some(format!("exit_code:{}", c)) });
-                    
-                    // Basic heuristic to attach pwd system note if command resembles directory change
-                    let no_output_expected = Some(stdout.trim().is_empty() && stderr.trim().is_empty());
-                    
+            Err(e) => {
+                // If timeout or failure, shell might be poisoned. Nuke it.
+                *guard = None;
+                if e.kind() == io::ErrorKind::TimedOut {
                     Ok(BashCommandOutput {
-                        stdout,
-                        stderr,
+                        stdout: String::new(),
+                        stderr: format!("Command exceeded timeout of {} ms", input.timeout.unwrap_or(0)),
                         raw_output_path: None,
-                        interrupted: false,
+                        interrupted: true,
                         is_image: None,
                         background_task_id: None,
                         backgrounded_by_user: None,
                         assistant_auto_backgrounded: None,
                         dangerously_disable_sandbox: input.dangerously_disable_sandbox,
-                        return_code_interpretation,
-                        no_output_expected,
+                        return_code_interpretation: Some("timeout".to_string()),
+                        no_output_expected: Some(true),
                         structured_content: None,
                         persisted_output_path: None,
                         persisted_output_size: None,
                         sandbox_status: Some(sandbox_status),
                     })
-                }
-                Err(e) => {
-                    // If timeout or failure, shell might be poisoned. Nuke it.
-                    *guard = None;
-                    if e.kind() == io::ErrorKind::TimedOut {
-                        Ok(BashCommandOutput {
-                            stdout: String::new(),
-                            stderr: format!("Command exceeded timeout of {} ms", input.timeout.unwrap_or(0)),
-                            raw_output_path: None,
-                            interrupted: true,
-                            is_image: None,
-                            background_task_id: None,
-                            backgrounded_by_user: None,
-                            assistant_auto_backgrounded: None,
-                            dangerously_disable_sandbox: input.dangerously_disable_sandbox,
-                            return_code_interpretation: Some("timeout".to_string()),
-                            no_output_expected: Some(true),
-                            structured_content: None,
-                            persisted_output_path: None,
-                            persisted_output_size: None,
-                            sandbox_status: Some(sandbox_status),
-                        })
-                    } else {
-                        Err(e)
-                    }
+                } else {
+                    Err(e)
                 }
             }
-        });
+        }
     }
-
-    bash_runtime().block_on(execute_bash_async(input, sandbox_status, cwd))
 }
 
 async fn execute_bash_async(
@@ -444,8 +441,8 @@ mod tests {
     use super::{execute_bash, BashCommandInput};
     use crate::sandbox::FilesystemIsolationMode;
 
-    #[test]
-    fn executes_simple_command() {
+    #[tokio::test]
+    async fn executes_simple_command() {
         let output = execute_bash(BashCommandInput {
             command: String::from("printf 'hello'"),
             timeout: Some(1_000),
@@ -457,6 +454,7 @@ mod tests {
             filesystem_mode: Some(FilesystemIsolationMode::WorkspaceOnly),
             allowed_mounts: None,
         })
+        .await
         .expect("bash command should execute");
 
         assert_eq!(output.stdout, "hello");
@@ -464,8 +462,8 @@ mod tests {
         assert!(output.sandbox_status.is_some());
     }
 
-    #[test]
-    fn disables_sandbox_when_requested() {
+    #[tokio::test]
+    async fn disables_sandbox_when_requested() {
         let output = execute_bash(BashCommandInput {
             command: String::from("printf 'hello'"),
             timeout: Some(1_000),
@@ -477,6 +475,7 @@ mod tests {
             filesystem_mode: None,
             allowed_mounts: None,
         })
+        .await
         .expect("bash command should execute");
 
         assert!(!output.sandbox_status.expect("sandbox status").enabled);

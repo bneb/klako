@@ -26,7 +26,7 @@ pub fn default_oauth_config() -> OAuthConfig {
     }
 }
 
-pub fn run_login() -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run_login() -> Result<(), Box<dyn std::error::Error>> {
     let cwd = std::env::current_dir()?;
     let config = ConfigLoader::default_for(&cwd).load()?;
     let default_oauth = default_oauth_config();
@@ -66,8 +66,7 @@ pub fn run_login() -> Result<(), Box<dyn std::error::Error>> {
     let client = KlaApiClient::from_auth(AuthSource::None).with_base_url(api::read_base_url());
     let exchange_request =
         OAuthTokenExchangeRequest::from_config(oauth, code, state, pkce.verifier, redirect_uri);
-    let runtime = tokio::runtime::Runtime::new()?;
-    let token_set = runtime.block_on(client.exchange_oauth_code(oauth, &exchange_request))?;
+    let token_set = client.exchange_oauth_code(oauth, &exchange_request).await?;
     save_oauth_credentials(&runtime::OAuthTokenSet {
         access_token: token_set.access_token,
         refresh_token: token_set.refresh_token,

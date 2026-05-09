@@ -1,22 +1,16 @@
 use crate::repl::LiveCli;
 
 impl LiveCli {
-    pub(crate) fn run_review(&self, path: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
-        let file_path = path.unwrap_or("docs/design/latest.md");
-        println!("Opening design document for review: {}", file_path);
+    pub async fn run_review(&self, path: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+        let target_path = path.unwrap_or(".");
+        println!("Initiating autonomous code review for: {target_path}");
         
-        let content = std::fs::read_to_string(file_path).unwrap_or_else(|e| format!("Error reading file: {}", e));
+        let prompt = format!(
+            "You are /review. Inspect the following path and identify code smells, potential bugs, and opportunities for refactoring. \
+            Be critical but constructive. Path: {target_path}"
+        );
         
-        // Broadcast to the Notebook UI to open the review pane with this file and its content
-        if let Some(tx) = &self.tx {
-            let _ = tx.send(serde_json::json!({
-                "type": "OpenReviewPane",
-                "file_path": file_path,
-                "content": content
-            }).to_string());
-        }
-        
-        println!("Please switch to the Notebook UI to interactively review and discuss the document.");
+        println!("{}", self.run_internal_prompt_text(&prompt, true).await?);
         Ok(())
     }
 }

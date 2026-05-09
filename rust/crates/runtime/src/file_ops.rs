@@ -8,8 +8,9 @@ use glob::Pattern;
 use regex::RegexBuilder;
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
+use schemars::JsonSchema;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct TextFilePayload {
     #[serde(rename = "filePath")]
     pub file_path: String,
@@ -22,14 +23,14 @@ pub struct TextFilePayload {
     pub total_lines: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct ReadFileOutput {
     #[serde(rename = "type")]
     pub kind: String,
     pub file: TextFilePayload,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct StructuredPatchHunk {
     #[serde(rename = "oldStart")]
     pub old_start: usize,
@@ -42,7 +43,7 @@ pub struct StructuredPatchHunk {
     pub lines: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct WriteFileOutput {
     #[serde(rename = "type")]
     pub kind: String,
@@ -57,7 +58,7 @@ pub struct WriteFileOutput {
     pub git_diff: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct EditFileOutput {
     #[serde(rename = "filePath")]
     pub file_path: String,
@@ -77,7 +78,7 @@ pub struct EditFileOutput {
     pub git_diff: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 pub struct GlobSearchOutput {
     #[serde(rename = "durationMs")]
     pub duration_ms: u128,
@@ -87,7 +88,7 @@ pub struct GlobSearchOutput {
     pub truncated: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct GrepSearchInput {
     pub pattern: String,
     pub path: Option<String>,
@@ -112,7 +113,7 @@ pub struct GrepSearchInput {
     pub multiline: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct GrepSearchOutput {
     pub mode: Option<String>,
     #[serde(rename = "numFiles")]
@@ -127,6 +128,14 @@ pub struct GrepSearchOutput {
     pub applied_limit: Option<usize>,
     #[serde(rename = "appliedOffset")]
     pub applied_offset: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+pub struct EditFileInput {
+    pub path: String,
+    pub old_string: String,
+    pub new_string: String,
+    pub replace_all: Option<bool>,
 }
 
 pub fn read_file(

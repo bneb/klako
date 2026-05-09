@@ -1,7 +1,7 @@
 use crate::repl::LiveCli;
 
 impl LiveCli {
-    pub(crate) fn run_map(&self, path: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn run_map(&self, path: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
         let target_path = path.unwrap_or(".");
         let absolute_path = std::env::current_dir()?.join(target_path);
         
@@ -12,7 +12,7 @@ impl LiveCli {
             "dir_path": absolute_path.to_string_lossy().to_string()
         });
         
-        match tools::execute_tool("DiscoveryWorld", &payload) {
+        match tools::execute_tool("DiscoveryWorld", &payload).await {
             Ok(result) => {
                 // Broadcast map data to the Notebook UI
                 if let Some(tx) = &self.tx {
@@ -25,7 +25,7 @@ impl LiveCli {
                 println!("Architecture map generated! Please view it in the Notebook UI.");
             }
             Err(e) => {
-                println!("Failed to generate map: {}", e);
+                println!("Failed to generate map: {e}");
             }
         }
         

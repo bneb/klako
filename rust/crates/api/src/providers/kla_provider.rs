@@ -389,11 +389,11 @@ pub fn oauth_token_is_expired(token_set: &OAuthTokenSet) -> bool {
         .is_some_and(|expires_at| expires_at <= now_unix_timestamp())
 }
 
-pub fn resolve_saved_oauth_token(config: &OAuthConfig) -> Result<Option<OAuthTokenSet>, ApiError> {
+pub async fn resolve_saved_oauth_token(config: &OAuthConfig) -> Result<Option<OAuthTokenSet>, ApiError> {
     let Some(token_set) = load_saved_oauth_token()? else {
         return Ok(None);
     };
-    resolve_saved_oauth_token_set(config, token_set).map(Some)
+    resolve_saved_oauth_token_set(config, token_set).await.map(Some)
 }
 
 pub fn has_auth_from_env_or_saved() -> Result<bool, ApiError> {
@@ -402,7 +402,7 @@ pub fn has_auth_from_env_or_saved() -> Result<bool, ApiError> {
         || load_saved_oauth_token()?.is_some())
 }
 
-pub fn resolve_startup_auth_source<F>(load_oauth_config: F) -> Result<AuthSource, ApiError>
+pub async fn resolve_startup_auth_source<F>(load_oauth_config: F) -> Result<AuthSource, ApiError>
 where
     F: FnOnce() -> Result<Option<OAuthConfig>, ApiError>,
 {
@@ -438,7 +438,7 @@ where
             };
             Ok(AuthSource::from(resolve_saved_oauth_token_set(
                 &config, token_set,
-            )?))
+            ).await?))
         },
         _ => Err(ApiError::missing_credentials(
             "Klako",
@@ -447,7 +447,7 @@ where
     }
 }
 
-fn resolve_saved_oauth_token_set(
+async fn resolve_saved_oauth_token_set(
     config: &OAuthConfig,
     token_set: OAuthTokenSet,
 ) -> Result<OAuthTokenSet, ApiError> {
@@ -458,8 +458,7 @@ fn resolve_saved_oauth_token_set(
         return Err(ApiError::ExpiredOAuthToken);
     };
     let client = KlaApiClient::from_auth(AuthSource::None).with_base_url(read_base_url());
-    let refreshed = client_runtime_block_on(async {
-        client
+    let refreshed = client
             .refresh_oauth_token(
                 config,
                 &OAuthRefreshRequest::from_config(
@@ -468,8 +467,8 @@ fn resolve_saved_oauth_token_set(
                     Some(token_set.scopes.clone()),
                 ),
             )
-            .await
-    })?;
+            .await?;
+            
     let resolved = OAuthTokenSet {
         access_token: refreshed.access_token,
         refresh_token: refreshed.refresh_token.or(token_set.refresh_token),
@@ -484,15 +483,6 @@ fn resolve_saved_oauth_token_set(
     })
     .map_err(ApiError::from)?;
     Ok(resolved)
-}
-
-fn client_runtime_block_on<F, T>(future: F) -> Result<T, ApiError>
-where
-    F: std::future::Future<Output = Result<T, ApiError>>,
-{
-    tokio::runtime::Runtime::new()
-        .map_err(ApiError::from)?
-        .block_on(future)
 }
 
 fn load_saved_oauth_token() -> Result<Option<OAuthTokenSet>, ApiError> {
@@ -833,8 +823,8 @@ mod tests {
         }));
     }
 
-    #[test]
-    fn resolve_saved_oauth_token_refreshes_expired_credentials() {
+    #[tokio::test]
+    async fn resolve_saved_oauth_token_refreshes_expired_credentials() {
         let _guard = env_lock();
         let config_home = temp_config_home();
         std::env::set_var("KLA_CONFIG_HOME", &config_home);
@@ -852,6 +842,7 @@ mod tests {
             "{\"access_token\":\"refreshed-token\",\"refresh_token\":\"fresh-refresh\",\"expires_at\":9999999999,\"scopes\":[\"scope:a\"]}",
         );
         let resolved = resolve_saved_oauth_token(&sample_oauth_config(token_url))
+            .await
             .expect("resolve refreshed token")
             .expect("token set present");
         assert_eq!(resolved.access_token, "refreshed-token");
@@ -865,8 +856,8 @@ mod tests {
         cleanup_temp_config_home(&config_home);
     }
 
-    #[test]
-    fn resolve_startup_auth_source_uses_saved_oauth_without_loading_config() {
+    #[tokio::test]
+    async fn resolve_startup_auth_source_uses_saved_oauth_without_loading_config() {
         let _guard = env_lock();
         let config_home = temp_config_home();
         std::env::set_var("KLA_CONFIG_HOME", &config_home);
@@ -882,6 +873,7 @@ mod tests {
         .expect("save oauth credentials");
 
         let auth = resolve_startup_auth_source(|| panic!("config should not be loaded"))
+            .await
             .expect("startup auth");
         assert_eq!(auth.bearer_token(), Some("saved-access-token"));
 
@@ -890,8 +882,8 @@ mod tests {
         cleanup_temp_config_home(&config_home);
     }
 
-    #[test]
-    fn resolve_startup_auth_source_errors_when_refreshable_token_lacks_config() {
+    #[tokio::test]
+    async fn resolve_startup_auth_source_errors_when_refreshable_token_lacks_config() {
         let _guard = env_lock();
         let config_home = temp_config_home();
         std::env::set_var("KLA_CONFIG_HOME", &config_home);
@@ -907,7 +899,7 @@ mod tests {
         .expect("save expired oauth credentials");
 
         let error =
-            resolve_startup_auth_source(|| Ok(None)).expect_err("missing config should error");
+            resolve_startup_auth_source(|| Ok(None)).await.expect_err("missing config should error");
         assert!(
             matches!(error, crate::error::ApiError::Auth(message) if message.contains("runtime OAuth config is missing"))
         );
@@ -923,8 +915,8 @@ mod tests {
         cleanup_temp_config_home(&config_home);
     }
 
-    #[test]
-    fn resolve_saved_oauth_token_preserves_refresh_token_when_refresh_response_omits_it() {
+    #[tokio::test]
+    async fn resolve_saved_oauth_token_preserves_refresh_token_when_refresh_response_omits_it() {
         let _guard = env_lock();
         let config_home = temp_config_home();
         std::env::set_var("KLA_CONFIG_HOME", &config_home);
@@ -942,6 +934,7 @@ mod tests {
             "{\"access_token\":\"refreshed-token\",\"expires_at\":9999999999,\"scopes\":[\"scope:a\"]}",
         );
         let resolved = resolve_saved_oauth_token(&sample_oauth_config(token_url))
+            .await
             .expect("resolve refreshed token")
             .expect("token set present");
         assert_eq!(resolved.access_token, "refreshed-token");

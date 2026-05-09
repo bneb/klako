@@ -85,7 +85,7 @@ pub fn handle_slash_command(
         SlashCommand::Loop { objective, budget: _ } => {
             let objective = objective.unwrap_or_else(|| "Solve the problem".to_string());
             Some(SlashCommandResult {
-                message: format!("Looping autonomously to solve: {}", objective),
+                message: format!("Looping autonomously to solve: {objective}"),
                 session: session.clone(),
             })
         }

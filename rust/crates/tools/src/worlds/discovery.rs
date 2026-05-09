@@ -9,7 +9,8 @@ use schemars::JsonSchema;
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum DiscoveryWorldInput { 
-    GetRepoMap { dir_path: String } 
+    GetRepoMap { dir_path: String },
+    QuerySymbols { name: String }
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -21,9 +22,19 @@ pub struct SymbolInfo {
 
 pub fn execute_discovery_world(i: DiscoveryWorldInput) -> Result<Value, String> {
     match i {
+        DiscoveryWorldInput::QuerySymbols { name } => {
+            let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+            let index_path = cwd.join(".klako/SWARM_GRAPH.db");
+            if !index_path.exists() {
+                return Err("Codebase index not found. Has it finished the initial scan?".to_string());
+            }
+            let index = runtime::index::CodebaseIndex::open(&index_path)?;
+            let results = index.query_symbol(&name)?;
+            Ok(json!({ "results": results }))
+        }
         DiscoveryWorldInput::GetRepoMap { dir_path } => {
             let root = Path::new(&dir_path);
-            if !root.exists() { return Err(format!("Path not found: {}", dir_path)); }
+            if !root.exists() { return Err(format!("Path not found: {dir_path}")); }
             
             let mut map = json!({});
             
@@ -38,7 +49,7 @@ pub fn execute_discovery_world(i: DiscoveryWorldInput) -> Result<Value, String> 
             let re_py_import = Regex::new(r"(?:import|from)\s+([a-zA-Z0-0_\.]+)").unwrap();
             let re_js_import = Regex::new(r#"import.*from\s+['"]([^'"]+)['"]"#).unwrap();
 
-            for entry in WalkDir::new(root).into_iter().filter_map(|e| e.ok()) {
+            for entry in WalkDir::new(root).into_iter().filter_map(std::result::Result::ok) {
                 if entry.file_type().is_file() {
                     let path = entry.path();
                     let rel_path = path.strip_prefix(root).unwrap().to_string_lossy().to_string();

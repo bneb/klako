@@ -4,7 +4,7 @@ mod render;
 mod auth;
 mod git;
 mod session;
-mod runtime_bridge;
+pub mod bridge;
 mod repl;
 mod reporting;
 mod notebook;
@@ -51,15 +51,16 @@ pub(crate) const INTERNAL_PROGRESS_HEARTBEAT_INTERVAL: Duration = Duration::from
 
 type AllowedToolSet = BTreeSet<String>;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     dotenvy::dotenv().ok();
-    if let Err(error) = run() {
+    if let Err(error) = run().await {
         eprintln!("{}", reporting::render_cli_error(&error.to_string()));
         std::process::exit(1);
     }
 }
 
-fn run() -> Result<(), Box<dyn std::error::Error>> {
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().skip(1).collect();
     match parse_args(&args)? {
         CliAction::Manifests => dump_manifests(),
@@ -78,9 +79,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             output_format,
             allowed_tools,
             permission_mode,
-        } => repl::LiveCli::new(model, true, allowed_tools, permission_mode, None)?
-            .run_turn_with_output(&prompt, output_format)?,
-        CliAction::Login => auth::run_login()?,
+        } => repl::LiveCli::new(model, true, allowed_tools, permission_mode, None).await?
+            .run_turn_with_output(&prompt, output_format).await?,
+        CliAction::Login => auth::run_login().await?,
         CliAction::Logout => auth::run_logout()?,
         CliAction::Init => run_init()?,
         CliAction::Notebook {
@@ -88,14 +89,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             allowed_tools,
             permission_mode,
         } => {
-            let (tx, ui_input_rx, permission_rx) = notebook::start_notebook_server()?;
-            repl::run_notebook_loop(model, allowed_tools, permission_mode, tx, ui_input_rx, permission_rx)?
+            let (tx, ui_input_rx, permission_rx) = notebook::start_notebook_server().await?;
+            crate::repl::notebook::run_notebook_loop(model, allowed_tools, permission_mode, tx, ui_input_rx, permission_rx).await?;
         }
         CliAction::Repl {
             model,
             allowed_tools,
             permission_mode,
-        } => repl::run_repl(model, allowed_tools, permission_mode)?,
+        } => repl::run_repl(model, allowed_tools, permission_mode).await?,
         CliAction::Help => print_help(),
     }
     Ok(())

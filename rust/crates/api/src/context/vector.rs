@@ -12,6 +12,7 @@ pub struct StateVector {
 
 impl StateVector {
     /// Renders the JSON into an Assistant Message payload
+    #[must_use] 
     pub fn into_message(self) -> InputMessage {
         let content = format!(
             "[SYSTEM DIAGNOSTIC: PREVIOUS CONTEXT COMPRESSED]\n{}",
